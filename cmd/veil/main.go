@@ -51,7 +51,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
-<<<<<<< HEAD
 	case "add":
 		addFlags := flag.NewFlagSet("add", flag.ContinueOnError)
 		addFlags.SetOutput(stderr)
@@ -72,8 +71,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
-=======
->>>>>>> main
 	default:
 		return fmt.Errorf("unsupported arguments: %v", args)
 	}

@@ -1,6 +1,5 @@
 package infra
 
-<<<<<<< HEAD
 import (
 	"bytes"
 	"os"
@@ -8,9 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 )
-=======
-import "os"
->>>>>>> main
 
 type OSFileSystem struct{}
 
@@ -26,13 +22,9 @@ func (OSFileSystem) Getwd() (string, error) {
 	return os.Getwd()
 }
 
-<<<<<<< HEAD
 func (OSFileSystem) EvalSymlinks(path string) (string, error) {
 	return filepath.EvalSymlinks(path)
 }
-
-=======
->>>>>>> main
 func (OSFileSystem) ReadFile(name string) ([]byte, error) {
 	return os.ReadFile(name)
 }
@@ -44,7 +36,6 @@ func (OSFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error 
 func (OSFileSystem) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
-<<<<<<< HEAD
 
 func (OSFileSystem) Remove(name string) error {
 	return os.Remove(name)
@@ -76,5 +67,3 @@ func (GitCLI) IsTracked(workspaceRoot, relativePath string) (bool, error) {
 
 	return true, nil
 }
-=======
->>>>>>> main

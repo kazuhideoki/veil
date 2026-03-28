@@ -2,10 +2,7 @@ package domain
 
 import (
 	"fmt"
-<<<<<<< HEAD
 	"path/filepath"
-=======
->>>>>>> main
 	"sort"
 	"strconv"
 	"strings"
@@ -89,13 +86,9 @@ func (c *Config) AddWorkspace(id, root string) error {
 		return fmt.Errorf("workspace id must not be empty")
 	}
 
-<<<<<<< HEAD
 	if err := validateWorkspaceID(id); err != nil {
 		return err
 	}
-
-=======
->>>>>>> main
 	if root == "" {
 		return fmt.Errorf("workspace root must not be empty")
 	}
@@ -117,7 +110,6 @@ func (c *Config) AddWorkspace(id, root string) error {
 	return nil
 }
 
-<<<<<<< HEAD
 func validateWorkspaceID(id string) error {
 	if id == "." || id == ".." {
 		return fmt.Errorf("workspace id must not be a relative path: %s", id)
@@ -222,9 +214,6 @@ func isWithinWorkspaceRoot(dir, root string) bool {
 
 	return strings.HasPrefix(dir, root+string(filepath.Separator))
 }
-
-=======
->>>>>>> main
 func renderStringArray(values []string) string {
 	if len(values) == 0 {
 		return "[]"
