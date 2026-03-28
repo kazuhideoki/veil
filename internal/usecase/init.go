@@ -13,6 +13,7 @@ import (
 type fileSystem interface {
 	UserHomeDir() (string, error)
 	Getwd() (string, error)
+	EvalSymlinks(path string) (string, error)
 	MkdirAll(path string, perm os.FileMode) error
 	ReadFile(name string) ([]byte, error)
 	WriteFile(name string, data []byte, perm os.FileMode) error
@@ -34,6 +35,11 @@ func (u InitConfig) Run() error {
 	currentDir, err := u.FileSystem.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve current directory: %w", err)
+	}
+
+	currentDir, err = u.FileSystem.EvalSymlinks(currentDir)
+	if err != nil {
+		return fmt.Errorf("canonicalize current directory: %w", err)
 	}
 
 	configDir := filepath.Join(homeDir, ".veil")
@@ -72,6 +78,9 @@ func (u InitConfig) Run() error {
 			return fmt.Errorf("parse config file: %w", err)
 		}
 	}
+
+	config.StorePath = expandHomeDir(config.StorePath, homeDir)
+	// TODO: Canonicalize existing workspace roots before duplicate checks so the same workspace cannot be registered twice via path aliases.
 
 	if err := config.AddWorkspace(workspaceID, currentDir); err != nil {
 		return err

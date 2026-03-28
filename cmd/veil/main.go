@@ -51,6 +51,26 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
+	case "add":
+		addFlags := flag.NewFlagSet("add", flag.ContinueOnError)
+		addFlags.SetOutput(stderr)
+
+		if err := addFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if addFlags.NArg() != 1 {
+			return fmt.Errorf("add requires exactly one target path")
+		}
+
+		runner := usecase.AddTarget{
+			FileSystem:     infra.OSFileSystem{},
+			TrackedChecker: infra.GitCLI{},
+			Stdout:         stdout,
+			TargetPath:     addFlags.Arg(0),
+		}
+
+		return runner.Run()
 	default:
 		return fmt.Errorf("unsupported arguments: %v", args)
 	}

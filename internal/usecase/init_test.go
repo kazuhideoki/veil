@@ -68,6 +68,11 @@ func TestInitConfigCreatesConfigFile(t *testing.T) {
 		t.Fatalf("workspace root = %q, want %q", workspace.Root, currentDir)
 	}
 
+	wantStorePath := filepath.Join(tempHome, "Library", "Mobile Documents", "com~apple~CloudDocs", "VeilStore")
+	if config.StorePath != wantStorePath {
+		t.Fatalf("store path = %q, want %q", config.StorePath, wantStorePath)
+	}
+
 	if len(workspace.Targets) != 0 {
 		t.Fatalf("workspace targets = %#v, want empty", workspace.Targets)
 	}
@@ -306,5 +311,66 @@ func TestInitConfigSupportsWorkspaceIDWithDotsAndSpaces(t *testing.T) {
 
 	if _, exists := config.Workspaces["my.app dev"]; !exists {
 		t.Fatalf("workspaces = %#v", config.Workspaces)
+	}
+}
+
+func TestInitConfigCanonicalizesWorkspaceRootBeforeSaving(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	realWorkspace := filepath.Join(tempHome, "real-workspace")
+	if err := os.MkdirAll(realWorkspace, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspace, err := filepath.EvalSymlinks(realWorkspace)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	symlinkWorkspace := filepath.Join(tempHome, "workspace-link")
+	if err := os.Symlink(realWorkspace, symlinkWorkspace); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+
+	if err := os.Chdir(symlinkWorkspace); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	uc := InitConfig{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &bytes.Buffer{},
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile() returned error: %v", err)
+	}
+
+	config, err := domain.ParseConfigTOML(data)
+	if err != nil {
+		t.Fatalf("ParseConfigTOML() returned error: %v", err)
+	}
+
+	workspace, exists := config.Workspaces["real-workspace"]
+	if !exists {
+		t.Fatalf("workspaces = %#v", config.Workspaces)
+	}
+
+	if workspace.Root != resolvedWorkspace {
+		t.Fatalf("workspace root = %q, want %q", workspace.Root, resolvedWorkspace)
 	}
 }

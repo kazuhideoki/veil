@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,6 +86,10 @@ func (c *Config) AddWorkspace(id, root string) error {
 		return fmt.Errorf("workspace id must not be empty")
 	}
 
+	if err := validateWorkspaceID(id); err != nil {
+		return err
+	}
+
 	if root == "" {
 		return fmt.Errorf("workspace root must not be empty")
 	}
@@ -104,6 +109,111 @@ func (c *Config) AddWorkspace(id, root string) error {
 		Targets: []string{},
 	}
 	return nil
+}
+
+func validateWorkspaceID(id string) error {
+	if id == "." || id == ".." {
+		return fmt.Errorf("workspace id must not be a relative path: %s", id)
+	}
+
+	if strings.Contains(id, "..") {
+		return fmt.Errorf("workspace id must not contain parent directory segments: %s", id)
+	}
+
+	if strings.Contains(id, string(filepath.Separator)) {
+		return fmt.Errorf("workspace id must not contain path separators: %s", id)
+	}
+
+	if filepath.Separator != '/' && strings.Contains(id, "/") {
+		return fmt.Errorf("workspace id must not contain path separators: %s", id)
+	}
+
+	if filepath.Separator != '\\' && strings.Contains(id, "\\") {
+		return fmt.Errorf("workspace id must not contain path separators: %s", id)
+	}
+
+	return nil
+}
+
+func (c Config) ResolveWorkspaceByDir(dir string) (string, Workspace, error) {
+	if dir == "" {
+		return "", Workspace{}, fmt.Errorf("workspace directory must not be empty")
+	}
+
+	var (
+		resolvedID        string
+		resolvedWorkspace Workspace
+		resolvedRootLen   int
+	)
+
+	for id, workspace := range c.Workspaces {
+		if !isWithinWorkspaceRoot(dir, workspace.Root) {
+			continue
+		}
+
+		rootLen := len(workspace.Root)
+		if resolvedID == "" || rootLen > resolvedRootLen {
+			resolvedID = id
+			resolvedWorkspace = workspace
+			resolvedRootLen = rootLen
+		}
+	}
+
+	if resolvedID == "" {
+		return "", Workspace{}, fmt.Errorf("workspace is not registered for directory: %s", dir)
+	}
+
+	return resolvedID, resolvedWorkspace, nil
+}
+
+func (w *Workspace) AddTarget(target string) error {
+	normalizedTarget, err := normalizeTargetPath(target)
+	if err != nil {
+		return err
+	}
+
+	for _, existing := range w.Targets {
+		if existing == normalizedTarget {
+			return fmt.Errorf("target already exists: %s", normalizedTarget)
+		}
+	}
+
+	w.Targets = append(w.Targets, normalizedTarget)
+	sort.Strings(w.Targets)
+	return nil
+}
+
+func normalizeTargetPath(target string) (string, error) {
+	if target == "" {
+		return "", fmt.Errorf("target path must not be empty")
+	}
+
+	if filepath.IsAbs(target) {
+		return "", fmt.Errorf("target path must be relative: %s", target)
+	}
+
+	cleanTarget := filepath.Clean(target)
+	if cleanTarget == "." {
+		return "", fmt.Errorf("target path must not be current directory")
+	}
+
+	if cleanTarget == ".." || strings.HasPrefix(cleanTarget, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("target path must stay within workspace: %s", target)
+	}
+
+	return cleanTarget, nil
+}
+
+func isWithinWorkspaceRoot(dir, root string) bool {
+	if root == "" {
+		return false
+	}
+
+	if dir == root {
+		return true
+	}
+
+	return strings.HasPrefix(dir, root+string(filepath.Separator))
 }
 
 func renderStringArray(values []string) string {

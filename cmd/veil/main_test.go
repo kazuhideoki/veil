@@ -85,3 +85,14 @@ func TestRunInitWithWorkspaceIDFlag(t *testing.T) {
 		t.Fatalf("config contents = %q", string(data))
 	}
 }
+
+func TestRunAddRequiresExactlyOneTargetPath(t *testing.T) {
+	err := run([]string{"add"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("run(add) returned nil error")
+	}
+
+	if !strings.Contains(err.Error(), "add requires exactly one target path") {
+		t.Fatalf("error = %q", err)
+	}
+}
