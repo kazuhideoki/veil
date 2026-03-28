@@ -12,6 +12,14 @@ func (OSFileSystem) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
+func (OSFileSystem) Getwd() (string, error) {
+	return os.Getwd()
+}
+
+func (OSFileSystem) ReadFile(name string) ([]byte, error) {
+	return os.ReadFile(name)
+}
+
 func (OSFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(name, data, perm)
 }

@@ -7,7 +7,7 @@ Usage:
   veil [command]
 
 Commands:
-  init      Create ~/.veil/config.toml
+  init      Initialize config and add the current workspace
 
 Options:
   --help    Show this help message
