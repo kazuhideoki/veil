@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
+	"github.com/kazuhideoki/veil/internal/infra"
 	"github.com/kazuhideoki/veil/internal/usecase"
 )
 
@@ -15,16 +17,30 @@ func main() {
 
 	flag.Parse()
 
-	if err := run(flag.Args()); err != nil {
+	if err := run(flag.Args(), os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
+func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return nil
 	}
 
-	return fmt.Errorf("unsupported arguments: %v", args)
+	switch args[0] {
+	case "init":
+		if len(args) != 1 {
+			return fmt.Errorf("init does not accept positional arguments: %v", args[1:])
+		}
+
+		runner := usecase.InitConfig{
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
+		}
+
+		return runner.Run()
+	default:
+		return fmt.Errorf("unsupported arguments: %v", args)
+	}
 }
