@@ -77,8 +77,13 @@ func (u InitConfig) Run() error {
 		return err
 	}
 
+	configData, err := config.RenderTOML()
+	if err != nil {
+		return err
+	}
+
 	fmt.Fprintf(u.Stdout, "writing config: %s\n", configPath)
-	if err := u.FileSystem.WriteFile(configPath, []byte(config.RenderTOML()), 0o644); err != nil {
+	if err := u.FileSystem.WriteFile(configPath, configData, 0o644); err != nil {
 		return fmt.Errorf("write config file: %w", err)
 	}
 

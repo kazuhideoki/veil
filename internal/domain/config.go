@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -13,16 +15,16 @@ const (
 )
 
 type Config struct {
-	Version    int
-	StorePath  string
-	DefaultTTL string
-	Workspaces map[string]Workspace
+	Version    int                  `toml:"version"`
+	StorePath  string               `toml:"store_path"`
+	DefaultTTL string               `toml:"default_ttl"`
+	Workspaces map[string]Workspace `toml:"workspaces"`
 }
 
 type Workspace struct {
-	Root    string
-	Targets []string
-	TTL     string
+	Root    string   `toml:"root"`
+	Targets []string `toml:"targets"`
+	TTL     string   `toml:"ttl,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -32,6 +34,50 @@ func DefaultConfig() Config {
 		DefaultTTL: DefaultTTL,
 		Workspaces: map[string]Workspace{},
 	}
+}
+
+func ParseConfigTOML(data []byte) (Config, error) {
+	config := DefaultConfig()
+	if err := toml.Unmarshal(data, &config); err != nil {
+		return Config{}, err
+	}
+
+	if config.Workspaces == nil {
+		config.Workspaces = map[string]Workspace{}
+	}
+
+	return config, nil
+}
+
+func (c Config) RenderTOML() ([]byte, error) {
+	if c.Workspaces == nil {
+		c.Workspaces = map[string]Workspace{}
+	}
+
+	var builder strings.Builder
+
+	fmt.Fprintf(&builder, "version = %d\n", c.Version)
+	fmt.Fprintf(&builder, "store_path = %s\n", strconv.Quote(c.StorePath))
+	fmt.Fprintf(&builder, "default_ttl = %s\n", strconv.Quote(c.DefaultTTL))
+
+	ids := make([]string, 0, len(c.Workspaces))
+	for id := range c.Workspaces {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		workspace := c.Workspaces[id]
+		builder.WriteString("\n")
+		fmt.Fprintf(&builder, "[workspaces.%s]\n", strconv.Quote(id))
+		fmt.Fprintf(&builder, "root = %s\n", strconv.Quote(workspace.Root))
+		fmt.Fprintf(&builder, "targets = %s\n", renderStringArray(workspace.Targets))
+		if workspace.TTL != "" {
+			fmt.Fprintf(&builder, "ttl = %s\n", strconv.Quote(workspace.TTL))
+		}
+	}
+
+	return []byte(builder.String()), nil
 }
 
 func (c *Config) AddWorkspace(id, root string) error {
@@ -60,201 +106,15 @@ func (c *Config) AddWorkspace(id, root string) error {
 	return nil
 }
 
-func (c Config) RenderTOML() string {
-	var builder strings.Builder
-
-	fmt.Fprintf(&builder, "version = %d\n", c.Version)
-	fmt.Fprintf(&builder, "store_path = %q\n", c.StorePath)
-	fmt.Fprintf(&builder, "default_ttl = %q\n", c.DefaultTTL)
-
-	ids := make([]string, 0, len(c.Workspaces))
-	for id := range c.Workspaces {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-
-	for _, id := range ids {
-		workspace := c.Workspaces[id]
-		builder.WriteString("\n")
-		fmt.Fprintf(&builder, "[workspaces.%s]\n", id)
-		fmt.Fprintf(&builder, "root = %q\n", workspace.Root)
-		fmt.Fprintf(&builder, "targets = %s\n", renderStringArray(workspace.Targets))
-		if workspace.TTL != "" {
-			fmt.Fprintf(&builder, "ttl = %q\n", workspace.TTL)
-		}
-	}
-
-	return builder.String()
-}
-
-func ParseConfigTOML(data []byte) (Config, error) {
-	config := DefaultConfig()
-	var currentWorkspaceID string
-
-	lines := strings.Split(string(data), "\n")
-	for index, rawLine := range lines {
-		lineNumber := index + 1
-		line := strings.TrimSpace(rawLine)
-		if line == "" {
-			continue
-		}
-
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section := strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
-			if !strings.HasPrefix(section, "workspaces.") {
-				return Config{}, fmt.Errorf("line %d: unsupported section %q", lineNumber, section)
-			}
-
-			currentWorkspaceID = strings.TrimPrefix(section, "workspaces.")
-			if currentWorkspaceID == "" {
-				return Config{}, fmt.Errorf("line %d: workspace id must not be empty", lineNumber)
-			}
-
-			if _, exists := config.Workspaces[currentWorkspaceID]; exists {
-				return Config{}, fmt.Errorf("line %d: duplicate workspace %q", lineNumber, currentWorkspaceID)
-			}
-
-			config.Workspaces[currentWorkspaceID] = Workspace{}
-			continue
-		}
-
-		key, value, err := splitKeyValue(line)
-		if err != nil {
-			return Config{}, fmt.Errorf("line %d: %w", lineNumber, err)
-		}
-
-		if currentWorkspaceID == "" {
-			if err := assignTopLevelConfig(&config, key, value); err != nil {
-				return Config{}, fmt.Errorf("line %d: %w", lineNumber, err)
-			}
-			continue
-		}
-
-		workspace := config.Workspaces[currentWorkspaceID]
-		if err := assignWorkspaceConfig(&workspace, key, value); err != nil {
-			return Config{}, fmt.Errorf("line %d: %w", lineNumber, err)
-		}
-		config.Workspaces[currentWorkspaceID] = workspace
-	}
-
-	return config, nil
-}
-
-func assignTopLevelConfig(config *Config, key, value string) error {
-	switch key {
-	case "version":
-		version, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid version %q", value)
-		}
-		config.Version = version
-		return nil
-	case "store_path":
-		parsed, err := parseQuotedString(value)
-		if err != nil {
-			return fmt.Errorf("invalid store_path: %w", err)
-		}
-		config.StorePath = parsed
-		return nil
-	case "default_ttl":
-		parsed, err := parseQuotedString(value)
-		if err != nil {
-			return fmt.Errorf("invalid default_ttl: %w", err)
-		}
-		config.DefaultTTL = parsed
-		return nil
-	default:
-		return fmt.Errorf("unsupported top-level key %q", key)
-	}
-}
-
-func assignWorkspaceConfig(workspace *Workspace, key, value string) error {
-	switch key {
-	case "root":
-		parsed, err := parseQuotedString(value)
-		if err != nil {
-			return fmt.Errorf("invalid root: %w", err)
-		}
-		workspace.Root = parsed
-		return nil
-	case "targets":
-		parsed, err := parseStringArray(value)
-		if err != nil {
-			return fmt.Errorf("invalid targets: %w", err)
-		}
-		workspace.Targets = parsed
-		return nil
-	case "ttl":
-		parsed, err := parseQuotedString(value)
-		if err != nil {
-			return fmt.Errorf("invalid ttl: %w", err)
-		}
-		workspace.TTL = parsed
-		return nil
-	default:
-		return fmt.Errorf("unsupported workspace key %q", key)
-	}
-}
-
-func splitKeyValue(line string) (string, string, error) {
-	parts := strings.SplitN(line, "=", 2)
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("expected key = value")
-	}
-
-	key := strings.TrimSpace(parts[0])
-	value := strings.TrimSpace(parts[1])
-	if key == "" {
-		return "", "", fmt.Errorf("key must not be empty")
-	}
-
-	return key, value, nil
-}
-
-func parseQuotedString(value string) (string, error) {
-	parsed, err := strconv.Unquote(value)
-	if err != nil {
-		return "", err
-	}
-	return parsed, nil
-}
-
-func parseStringArray(value string) ([]string, error) {
-	value = strings.TrimSpace(value)
-	if value == "[]" {
-		return []string{}, nil
-	}
-
-	if !strings.HasPrefix(value, "[") || !strings.HasSuffix(value, "]") {
-		return nil, fmt.Errorf("expected array")
-	}
-
-	content := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"))
-	if content == "" {
-		return []string{}, nil
-	}
-
-	parts := strings.Split(content, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		item, err := parseQuotedString(strings.TrimSpace(part))
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, item)
-	}
-
-	return result, nil
-}
-
 func renderStringArray(values []string) string {
 	if len(values) == 0 {
 		return "[]"
 	}
 
-	quoted := make([]string, 0, len(values))
+	items := make([]string, 0, len(values))
 	for _, value := range values {
-		quoted = append(quoted, strconv.Quote(value))
+		items = append(items, strconv.Quote(value))
 	}
-	return "[" + strings.Join(quoted, ", ") + "]"
+
+	return "[" + strings.Join(items, ", ") + "]"
 }
