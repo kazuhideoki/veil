@@ -81,7 +81,7 @@ func TestRunInitWithWorkspaceIDFlag(t *testing.T) {
 		t.Fatalf("ReadFile() returned error: %v", err)
 	}
 
-	if !strings.Contains(string(data), "[workspaces.myapp]") {
+	if !strings.Contains(string(data), "[workspaces.\"myapp\"]") {
 		t.Fatalf("config contents = %q", string(data))
 	}
 }
