@@ -68,11 +68,14 @@ func TestInitConfigCreatesConfigFile(t *testing.T) {
 		t.Fatalf("workspace root = %q, want %q", workspace.Root, currentDir)
 	}
 
+<<<<<<< HEAD
 	wantStorePath := filepath.Join(tempHome, "Library", "Mobile Documents", "com~apple~CloudDocs", "VeilStore")
 	if config.StorePath != wantStorePath {
 		t.Fatalf("store path = %q, want %q", config.StorePath, wantStorePath)
 	}
 
+=======
+>>>>>>> main
 	if len(workspace.Targets) != 0 {
 		t.Fatalf("workspace targets = %#v, want empty", workspace.Targets)
 	}
@@ -313,6 +316,7 @@ func TestInitConfigSupportsWorkspaceIDWithDotsAndSpaces(t *testing.T) {
 		t.Fatalf("workspaces = %#v", config.Workspaces)
 	}
 }
+<<<<<<< HEAD
 
 func TestInitConfigCanonicalizesWorkspaceRootBeforeSaving(t *testing.T) {
 	tempHome := t.TempDir()
@@ -374,3 +378,5 @@ func TestInitConfigCanonicalizesWorkspaceRootBeforeSaving(t *testing.T) {
 		t.Fatalf("workspace root = %q, want %q", workspace.Root, resolvedWorkspace)
 	}
 }
+=======
+>>>>>>> main

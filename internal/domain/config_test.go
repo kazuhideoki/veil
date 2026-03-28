@@ -51,6 +51,7 @@ func TestRenderTOMLQuotesWorkspaceID(t *testing.T) {
 		t.Fatalf("workspaces = %#v", parsed.Workspaces)
 	}
 }
+<<<<<<< HEAD
 
 func TestWorkspaceAddTargetRejectsWorkspaceEscape(t *testing.T) {
 	workspace := Workspace{}
@@ -123,3 +124,5 @@ func TestAddWorkspaceRejectsWorkspaceIDWithPathSeparator(t *testing.T) {
 		t.Fatalf("error = %q", err)
 	}
 }
+=======
+>>>>>>> main

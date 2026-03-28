@@ -8,7 +8,10 @@ Usage:
 
 Commands:
   init      Initialize config and add the current workspace
+<<<<<<< HEAD
   add       Move a target file into Veil store and register it
+=======
+>>>>>>> main
 
 Options:
   --help    Show this help message

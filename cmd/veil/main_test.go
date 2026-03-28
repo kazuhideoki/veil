@@ -85,6 +85,7 @@ func TestRunInitWithWorkspaceIDFlag(t *testing.T) {
 		t.Fatalf("config contents = %q", string(data))
 	}
 }
+<<<<<<< HEAD
 
 func TestRunAddRequiresExactlyOneTargetPath(t *testing.T) {
 	err := run([]string{"add"}, &bytes.Buffer{}, &bytes.Buffer{})
@@ -96,3 +97,5 @@ func TestRunAddRequiresExactlyOneTargetPath(t *testing.T) {
 		t.Fatalf("error = %q", err)
 	}
 }
+=======
+>>>>>>> main
