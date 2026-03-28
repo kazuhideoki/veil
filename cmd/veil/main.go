@@ -30,13 +30,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	switch args[0] {
 	case "init":
-		if len(args) != 1 {
-			return fmt.Errorf("init does not accept positional arguments: %v", args[1:])
+		initFlags := flag.NewFlagSet("init", flag.ContinueOnError)
+		initFlags.SetOutput(stderr)
+
+		var workspaceID string
+		initFlags.StringVar(&workspaceID, "workspace-id", "", "workspace id to add")
+
+		if err := initFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if initFlags.NArg() != 0 {
+			return fmt.Errorf("init does not accept positional arguments: %v", initFlags.Args())
 		}
 
 		runner := usecase.InitConfig{
-			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
+			FileSystem:  infra.OSFileSystem{},
+			Stdout:      stdout,
+			WorkspaceID: workspaceID,
 		}
 
 		return runner.Run()
