@@ -9,6 +9,7 @@ Usage:
 Commands:
   init      Initialize config and add the current workspace
   add       Move a target file into Veil store and register it
+  edit      Open a registered store file with $EDITOR
   emerge    Create workspace symlinks for registered targets
   vanish    Remove Veil-managed workspace symlinks for registered targets
 

@@ -8,7 +8,7 @@ import (
 func TestHelpText(t *testing.T) {
 	help := HelpText()
 
-	for _, want := range []string{"Usage:", "veil [command]", "init", "add", "emerge", "current workspace", "--help"} {
+	for _, want := range []string{"Usage:", "veil [command]", "init", "add", "edit", "emerge", "current workspace", "--help"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("HelpText() does not contain %q", want)
 		}

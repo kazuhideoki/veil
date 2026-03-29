@@ -71,6 +71,26 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
+	case "edit":
+		editFlags := flag.NewFlagSet("edit", flag.ContinueOnError)
+		editFlags.SetOutput(stderr)
+
+		if err := editFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if editFlags.NArg() != 1 {
+			return fmt.Errorf("edit requires exactly one target path")
+		}
+
+		runner := usecase.EditTarget{
+			FileSystem:   infra.OSFileSystem{},
+			EditorRunner: infra.ExecEditorRunner{},
+			EditorPath:   os.Getenv("EDITOR"),
+			TargetPath:   editFlags.Arg(0),
+		}
+
+		return runner.Run()
 	case "emerge":
 		emergeFlags := flag.NewFlagSet("emerge", flag.ContinueOnError)
 		emergeFlags.SetOutput(stderr)

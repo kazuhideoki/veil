@@ -79,3 +79,14 @@ func (GitCLI) IsTracked(workspaceRoot, relativePath string) (bool, error) {
 
 	return true, nil
 }
+
+type ExecEditorRunner struct{}
+
+func (ExecEditorRunner) Run(editorPath string, editorArgs []string, targetPath string) error {
+	args := append(append([]string(nil), editorArgs...), targetPath)
+	cmd := exec.Command(editorPath, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}

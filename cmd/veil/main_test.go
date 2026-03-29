@@ -98,6 +98,17 @@ func TestRunAddRequiresExactlyOneTargetPath(t *testing.T) {
 	}
 }
 
+func TestRunEditRequiresExactlyOneTargetPath(t *testing.T) {
+	err := run([]string{"edit"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("run(edit) returned nil error")
+	}
+
+	if !strings.Contains(err.Error(), "edit requires exactly one target path") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
 func TestRunEmergeUsesRegisteredWorkspace(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
