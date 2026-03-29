@@ -37,6 +37,18 @@ func (OSFileSystem) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
 
+func (OSFileSystem) Lstat(name string) (os.FileInfo, error) {
+	return os.Lstat(name)
+}
+
+func (OSFileSystem) Readlink(name string) (string, error) {
+	return os.Readlink(name)
+}
+
+func (OSFileSystem) Symlink(oldname, newname string) error {
+	return os.Symlink(oldname, newname)
+}
+
 func (OSFileSystem) Remove(name string) error {
 	return os.Remove(name)
 }

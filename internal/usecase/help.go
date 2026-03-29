@@ -9,6 +9,7 @@ Usage:
 Commands:
   init      Initialize config and add the current workspace
   add       Move a target file into Veil store and register it
+  emerge    Create workspace symlinks for registered targets
 
 Options:
   --help    Show this help message

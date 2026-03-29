@@ -71,6 +71,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
+	case "emerge":
+		emergeFlags := flag.NewFlagSet("emerge", flag.ContinueOnError)
+		emergeFlags.SetOutput(stderr)
+
+		if err := emergeFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if emergeFlags.NArg() != 0 {
+			return fmt.Errorf("emerge does not accept positional arguments: %v", emergeFlags.Args())
+		}
+
+		runner := usecase.EmergeTargets{
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
+		}
+
+		return runner.Run()
 	default:
 		return fmt.Errorf("unsupported arguments: %v", args)
 	}

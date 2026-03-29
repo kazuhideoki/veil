@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -120,6 +121,35 @@ func TestAddWorkspaceRejectsWorkspaceIDWithPathSeparator(t *testing.T) {
 	}
 
 	if !strings.Contains(err.Error(), "must not contain path separators") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestConfigStoreTargetPathBuildsWorkspaceScopedPath(t *testing.T) {
+	config := DefaultConfig()
+	config.StorePath = "/tmp/veil-store"
+
+	got, err := config.StoreTargetPath("myapp", "config/service-account.json")
+	if err != nil {
+		t.Fatalf("StoreTargetPath() returned error: %v", err)
+	}
+
+	want := filepath.Join("/tmp/veil-store", "workspaces", "myapp", "config", "service-account.json")
+	if got != want {
+		t.Fatalf("store target path = %q, want %q", got, want)
+	}
+}
+
+func TestConfigStoreTargetPathRejectsInvalidWorkspaceID(t *testing.T) {
+	config := DefaultConfig()
+	config.StorePath = "/tmp/veil-store"
+
+	_, err := config.StoreTargetPath("../myapp", ".env")
+	if err == nil {
+		t.Fatal("StoreTargetPath() returned nil error")
+	}
+
+	if !strings.Contains(err.Error(), "workspace id") {
 		t.Fatalf("error = %q", err)
 	}
 }

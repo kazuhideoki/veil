@@ -89,7 +89,11 @@ func (u AddTarget) Run() error {
 		return fmt.Errorf("target is tracked by git: %s", targetPath)
 	}
 
-	storeTargetPath := filepath.Join(config.StorePath, "workspaces", workspaceID, targetPath)
+	storeTargetPath, err := config.StoreTargetPath(workspaceID, targetPath)
+	if err != nil {
+		return err
+	}
+
 	if _, err := u.FileSystem.Stat(storeTargetPath); err == nil {
 		return fmt.Errorf("store target already exists: %s", targetPath)
 	} else if !errors.Is(err, os.ErrNotExist) {

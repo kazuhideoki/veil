@@ -110,6 +110,19 @@ func (c *Config) AddWorkspace(id, root string) error {
 	return nil
 }
 
+func (c Config) StoreTargetPath(workspaceID, target string) (string, error) {
+	if err := validateWorkspaceID(workspaceID); err != nil {
+		return "", err
+	}
+
+	normalizedTarget, err := normalizeTargetPath(target)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(c.StorePath, "workspaces", workspaceID, normalizedTarget), nil
+}
+
 func validateWorkspaceID(id string) error {
 	if id == "." || id == ".." {
 		return fmt.Errorf("workspace id must not be a relative path: %s", id)
