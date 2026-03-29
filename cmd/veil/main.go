@@ -89,6 +89,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
+	case "vanish":
+		vanishFlags := flag.NewFlagSet("vanish", flag.ContinueOnError)
+		vanishFlags.SetOutput(stderr)
+
+		if err := vanishFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if vanishFlags.NArg() != 0 {
+			return fmt.Errorf("vanish does not accept positional arguments: %v", vanishFlags.Args())
+		}
+
+		runner := usecase.VanishTargets{
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
+		}
+
+		return runner.Run()
 	default:
 		return fmt.Errorf("unsupported arguments: %v", args)
 	}

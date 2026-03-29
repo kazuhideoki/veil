@@ -133,7 +133,7 @@ func ensureEmergedTarget(fs emergeFileSystem, workspaceTargetPath, storeTargetPa
 	return false, nil
 }
 
-func resolveLinkTarget(fs emergeFileSystem, workspaceTargetPath, linkTarget string) (string, error) {
+func resolveLinkTarget(fs symlinkEvaluator, workspaceTargetPath, linkTarget string) (string, error) {
 	if !filepath.IsAbs(linkTarget) {
 		linkTarget = filepath.Join(filepath.Dir(workspaceTargetPath), linkTarget)
 	}
