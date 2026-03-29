@@ -127,6 +127,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
+	case "status":
+		statusFlags := flag.NewFlagSet("status", flag.ContinueOnError)
+		statusFlags.SetOutput(stderr)
+
+		if err := statusFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if statusFlags.NArg() != 0 {
+			return fmt.Errorf("status does not accept positional arguments: %v", statusFlags.Args())
+		}
+
+		runner := usecase.StatusTargets{
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
+		}
+
+		return runner.Run()
 	default:
 		return fmt.Errorf("unsupported arguments: %v", args)
 	}
