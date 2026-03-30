@@ -195,6 +195,24 @@ func (w *Workspace) AddTarget(target string) error {
 	return nil
 }
 
+func (w *Workspace) RemoveTarget(target string) error {
+	normalizedTarget, err := normalizeTargetPath(target)
+	if err != nil {
+		return err
+	}
+
+	for idx, existing := range w.Targets {
+		if existing != normalizedTarget {
+			continue
+		}
+
+		w.Targets = append(w.Targets[:idx], w.Targets[idx+1:]...)
+		return nil
+	}
+
+	return fmt.Errorf("target does not exist: %s", normalizedTarget)
+}
+
 func normalizeTargetPath(target string) (string, error) {
 	if target == "" {
 		return "", fmt.Errorf("target path must not be empty")

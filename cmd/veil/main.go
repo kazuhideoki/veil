@@ -91,6 +91,44 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
+	case "remove":
+		removeFlags := flag.NewFlagSet("remove", flag.ContinueOnError)
+		removeFlags.SetOutput(stderr)
+
+		if err := removeFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if removeFlags.NArg() != 1 {
+			return fmt.Errorf("remove requires exactly one target path")
+		}
+
+		runner := usecase.RemoveTarget{
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
+			TargetPath: removeFlags.Arg(0),
+		}
+
+		return runner.Run()
+	case "purge":
+		purgeFlags := flag.NewFlagSet("purge", flag.ContinueOnError)
+		purgeFlags.SetOutput(stderr)
+
+		if err := purgeFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if purgeFlags.NArg() != 1 {
+			return fmt.Errorf("purge requires exactly one target path")
+		}
+
+		runner := usecase.PurgeTarget{
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
+			TargetPath: purgeFlags.Arg(0),
+		}
+
+		return runner.Run()
 	case "emerge":
 		emergeFlags := flag.NewFlagSet("emerge", flag.ContinueOnError)
 		emergeFlags.SetOutput(stderr)

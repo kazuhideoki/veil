@@ -85,33 +85,12 @@ func vanishTarget(fs vanishFileSystem, workspaceTargetPath, storeTargetPath stri
 		return "skipped", nil
 	}
 
-	linkTarget, err := fs.Readlink(workspaceTargetPath)
+	managed, err := isManagedWorkspaceSymlink(fs, workspaceTargetPath, storeTargetPath)
 	if err != nil {
-		return "", fmt.Errorf("read workspace symlink: %w", err)
+		return "", err
 	}
-
-	absoluteLinkTarget := absoluteLinkTargetPath(workspaceTargetPath, linkTarget)
-	absoluteStoreTargetPath := filepath.Clean(storeTargetPath)
-
-	resolvedLinkTarget, err := resolveLinkTarget(fs, workspaceTargetPath, linkTarget)
-	if err != nil {
-		// Fall back to the declared path so broken managed symlinks can still be cleaned up.
-		if absoluteLinkTarget != absoluteStoreTargetPath {
-			return "skipped", nil
-		}
-	} else {
-		resolvedStoreTargetPath, err := fs.EvalSymlinks(storeTargetPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				if absoluteLinkTarget != absoluteStoreTargetPath {
-					return "skipped", nil
-				}
-			} else {
-				return "", fmt.Errorf("canonicalize store target: %w", err)
-			}
-		} else if resolvedLinkTarget != resolvedStoreTargetPath {
-			return "skipped", nil
-		}
+	if !managed {
+		return "skipped", nil
 	}
 
 	if err := fs.Remove(workspaceTargetPath); err != nil {
@@ -127,4 +106,30 @@ func absoluteLinkTargetPath(workspaceTargetPath, linkTarget string) string {
 	}
 
 	return filepath.Clean(linkTarget)
+}
+
+func isManagedWorkspaceSymlink(fs vanishFileSystem, workspaceTargetPath, storeTargetPath string) (bool, error) {
+	linkTarget, err := fs.Readlink(workspaceTargetPath)
+	if err != nil {
+		return false, fmt.Errorf("read workspace symlink: %w", err)
+	}
+
+	absoluteLinkTarget := absoluteLinkTargetPath(workspaceTargetPath, linkTarget)
+	absoluteStoreTargetPath := filepath.Clean(storeTargetPath)
+
+	resolvedLinkTarget, err := resolveLinkTarget(fs, workspaceTargetPath, linkTarget)
+	if err != nil {
+		// Broken managed symlinks should still be removable if they point at the expected store path.
+		return absoluteLinkTarget == absoluteStoreTargetPath, nil
+	}
+
+	resolvedStoreTargetPath, err := fs.EvalSymlinks(storeTargetPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return absoluteLinkTarget == absoluteStoreTargetPath, nil
+		}
+		return false, fmt.Errorf("canonicalize store target: %w", err)
+	}
+
+	return resolvedLinkTarget == resolvedStoreTargetPath, nil
 }

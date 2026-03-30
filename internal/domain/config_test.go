@@ -80,6 +80,35 @@ func TestWorkspaceAddTargetNormalizesAndSortsTargets(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRemoveTargetRemovesNormalizedTarget(t *testing.T) {
+	workspace := Workspace{
+		Targets: []string{".env", "config/app.json"},
+	}
+
+	if err := workspace.RemoveTarget("config/../config/app.json"); err != nil {
+		t.Fatalf("RemoveTarget() returned error: %v", err)
+	}
+
+	if got, want := strings.Join(workspace.Targets, ","), ".env"; got != want {
+		t.Fatalf("targets = %q, want %q", got, want)
+	}
+}
+
+func TestWorkspaceRemoveTargetReturnsErrorWhenTargetIsMissing(t *testing.T) {
+	workspace := Workspace{
+		Targets: []string{".env"},
+	}
+
+	err := workspace.RemoveTarget("config/app.json")
+	if err == nil {
+		t.Fatal("RemoveTarget() returned nil error")
+	}
+
+	if !strings.Contains(err.Error(), "target does not exist") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
 func TestConfigResolveWorkspaceByDirUsesDeepestRoot(t *testing.T) {
 	config := DefaultConfig()
 	config.Workspaces["root"] = Workspace{Root: "/tmp/app"}

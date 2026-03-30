@@ -508,6 +508,18 @@ func (fs failingConfigWriteFS) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
 
+func (fs failingConfigWriteFS) Lstat(name string) (os.FileInfo, error) {
+	return os.Lstat(name)
+}
+
+func (fs failingConfigWriteFS) Readlink(name string) (string, error) {
+	return os.Readlink(name)
+}
+
+func (fs failingConfigWriteFS) Symlink(oldname, newname string) error {
+	return os.Symlink(oldname, newname)
+}
+
 func (fs failingConfigWriteFS) Remove(name string) error {
 	return os.Remove(name)
 }
