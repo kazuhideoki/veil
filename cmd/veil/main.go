@@ -129,6 +129,57 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return runner.Run()
+	case "workspace":
+		if len(args) < 2 {
+			return fmt.Errorf("workspace requires a subcommand")
+		}
+
+		switch args[1] {
+		case "remove":
+			workspaceRemoveFlags := flag.NewFlagSet("workspace remove", flag.ContinueOnError)
+			workspaceRemoveFlags.SetOutput(stderr)
+
+			if err := workspaceRemoveFlags.Parse(args[2:]); err != nil {
+				return err
+			}
+
+			if workspaceRemoveFlags.NArg() != 0 {
+				return fmt.Errorf("workspace remove does not accept positional arguments: %v", workspaceRemoveFlags.Args())
+			}
+
+			runner := usecase.RemoveWorkspace{
+				FileSystem: infra.OSFileSystem{},
+				Stdout:     stdout,
+			}
+
+			return runner.Run()
+		case "purge":
+			workspacePurgeFlags := flag.NewFlagSet("workspace purge", flag.ContinueOnError)
+			workspacePurgeFlags.SetOutput(stderr)
+
+			var assumeYes bool
+			workspacePurgeFlags.BoolVar(&assumeYes, "yes", false, "skip confirmation")
+
+			if err := workspacePurgeFlags.Parse(args[2:]); err != nil {
+				return err
+			}
+
+			if workspacePurgeFlags.NArg() != 0 {
+				return fmt.Errorf("workspace purge does not accept positional arguments: %v", workspacePurgeFlags.Args())
+			}
+
+			runner := usecase.PurgeWorkspace{
+				FileSystem:  infra.OSFileSystem{},
+				Stdin:       os.Stdin,
+				Stdout:      stdout,
+				Interactive: stdinIsTerminal(),
+				AssumeYes:   assumeYes,
+			}
+
+			return runner.Run()
+		default:
+			return fmt.Errorf("unsupported workspace arguments: %v", args[1:])
+		}
 	case "emerge":
 		emergeFlags := flag.NewFlagSet("emerge", flag.ContinueOnError)
 		emergeFlags.SetOutput(stderr)
@@ -186,4 +237,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unsupported arguments: %v", args)
 	}
+}
+
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+
+	return info.Mode()&os.ModeCharDevice != 0
 }

@@ -213,6 +213,15 @@ func (w *Workspace) RemoveTarget(target string) error {
 	return fmt.Errorf("target does not exist: %s", normalizedTarget)
 }
 
+func (c *Config) RemoveWorkspace(id string) error {
+	if _, exists := c.Workspaces[id]; !exists {
+		return fmt.Errorf("workspace does not exist: %s", id)
+	}
+
+	delete(c.Workspaces, id)
+	return nil
+}
+
 func normalizeTargetPath(target string) (string, error) {
 	if target == "" {
 		return "", fmt.Errorf("target path must not be empty")

@@ -49,15 +49,13 @@ func (u RemoveTarget) Run() error {
 	}
 
 	if err := ctx.persistConfig(u.FileSystem, u.Stdout); err != nil {
-		if change.rollbackPersistFailure != nil {
-			if rollbackErr := change.rollbackPersistFailure(); rollbackErr != nil {
-				return errors.Join(err, fmt.Errorf("rollback remove target: %w", rollbackErr))
-			}
+		if rollbackErr := rollbackPreparedChanges([]preparedTargetChange{change}, "rollback remove target"); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
 		}
 		return err
 	}
 
-	if err := change.postCommit(); err != nil {
+	if err := runPostCommitChanges([]preparedTargetChange{change}); err != nil {
 		return err
 	}
 
@@ -77,15 +75,13 @@ func (u PurgeTarget) Run() error {
 	}
 
 	if err := ctx.persistConfig(u.FileSystem, u.Stdout); err != nil {
-		if change.rollbackPersistFailure != nil {
-			if rollbackErr := change.rollbackPersistFailure(); rollbackErr != nil {
-				return errors.Join(err, fmt.Errorf("rollback purge target: %w", rollbackErr))
-			}
+		if rollbackErr := rollbackPreparedChanges([]preparedTargetChange{change}, "rollback purge target"); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
 		}
 		return err
 	}
 
-	if err := change.postCommit(); err != nil {
+	if err := runPostCommitChanges([]preparedTargetChange{change}); err != nil {
 		return err
 	}
 
@@ -225,6 +221,39 @@ func prepareTargetPurge(fs removeFileSystem, ctx *activeWorkspaceContext, target
 			return nil
 		},
 	}, nil
+}
+
+func rollbackPreparedChanges(changes []preparedTargetChange, action string) error {
+	var rollbackErr error
+
+	for i := len(changes) - 1; i >= 0; i-- {
+		change := changes[i]
+		if change.rollbackPersistFailure == nil {
+			continue
+		}
+
+		if err := change.rollbackPersistFailure(); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("%s %s: %w", action, change.target, err))
+		}
+	}
+
+	return rollbackErr
+}
+
+func runPostCommitChanges(changes []preparedTargetChange) error {
+	var postCommitErr error
+
+	for _, change := range changes {
+		if change.postCommit == nil {
+			continue
+		}
+
+		if err := change.postCommit(); err != nil {
+			postCommitErr = errors.Join(postCommitErr, fmt.Errorf("%s: %w", change.target, err))
+		}
+	}
+
+	return postCommitErr
 }
 
 func shouldVanishTarget(fs removeFileSystem, workspaceTargetPath, storeTargetPath string) (bool, error) {

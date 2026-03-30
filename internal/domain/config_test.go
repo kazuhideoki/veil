@@ -109,6 +109,37 @@ func TestWorkspaceRemoveTargetReturnsErrorWhenTargetIsMissing(t *testing.T) {
 	}
 }
 
+func TestConfigRemoveWorkspaceRemovesExistingWorkspace(t *testing.T) {
+	config := DefaultConfig()
+	config.Workspaces["myapp"] = Workspace{Root: "/tmp/myapp"}
+	config.Workspaces["other"] = Workspace{Root: "/tmp/other"}
+
+	if err := config.RemoveWorkspace("myapp"); err != nil {
+		t.Fatalf("RemoveWorkspace() returned error: %v", err)
+	}
+
+	if _, exists := config.Workspaces["myapp"]; exists {
+		t.Fatalf("workspaces = %#v", config.Workspaces)
+	}
+
+	if _, exists := config.Workspaces["other"]; !exists {
+		t.Fatalf("workspaces = %#v", config.Workspaces)
+	}
+}
+
+func TestConfigRemoveWorkspaceReturnsErrorWhenWorkspaceIsMissing(t *testing.T) {
+	config := DefaultConfig()
+
+	err := config.RemoveWorkspace("missing")
+	if err == nil {
+		t.Fatal("RemoveWorkspace() returned nil error")
+	}
+
+	if !strings.Contains(err.Error(), "workspace does not exist") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
 func TestConfigResolveWorkspaceByDirUsesDeepestRoot(t *testing.T) {
 	config := DefaultConfig()
 	config.Workspaces["root"] = Workspace{Root: "/tmp/app"}

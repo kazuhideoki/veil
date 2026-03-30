@@ -63,7 +63,10 @@ func loadActiveWorkspaceContext(fs activeWorkspaceFileSystem) (activeWorkspaceCo
 
 func (c *activeWorkspaceContext) persistConfig(fs activeWorkspaceFileSystem, stdout io.Writer) error {
 	c.config.Workspaces[c.workspaceID] = c.workspace
+	return c.persistRenderedConfig(fs, stdout)
+}
 
+func (c *activeWorkspaceContext) persistRenderedConfig(fs activeWorkspaceFileSystem, stdout io.Writer) error {
 	configData, err := c.config.RenderTOML()
 	if err != nil {
 		return err
