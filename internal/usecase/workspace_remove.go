@@ -54,6 +54,10 @@ func (u RemoveWorkspace) Run() error {
 		return err
 	}
 
+	if err := clearWorkspaceLeases(u.FileSystem, ctx.workspaceID); err != nil {
+		return err
+	}
+
 	fmt.Fprintf(u.Stdout, "removed workspace: %s\n", ctx.workspaceID)
 	return nil
 }
@@ -89,6 +93,10 @@ func (u PurgeWorkspace) Run() error {
 	}
 
 	if err := finishWorkspaceChanges(u.FileSystem, &ctx, changes); err != nil {
+		return err
+	}
+
+	if err := clearWorkspaceLeases(u.FileSystem, ctx.workspaceID); err != nil {
 		return err
 	}
 
@@ -153,4 +161,20 @@ func finishWorkspaceChanges(fs removeFileSystem, ctx *activeWorkspaceContext, ch
 	}
 
 	return postCommitErr
+}
+
+func clearWorkspaceLeases(fs stateFileSystem, workspaceID string) error {
+	statePath, state, lock, err := loadStateLocked(fs)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Unlock()
+	}()
+
+	if err := state.RemoveWorkspaceLeases(workspaceID); err != nil {
+		return err
+	}
+
+	return persistState(fs, statePath, state)
 }

@@ -504,6 +504,10 @@ func (fs failingConfigWriteFS) WriteFile(name string, data []byte, perm os.FileM
 	return os.WriteFile(name, data, perm)
 }
 
+func (fs failingConfigWriteFS) Rename(oldpath, newpath string) error {
+	return os.Rename(oldpath, newpath)
+}
+
 func (fs failingConfigWriteFS) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }

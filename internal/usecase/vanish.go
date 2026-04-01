@@ -12,7 +12,10 @@ type vanishFileSystem interface {
 	UserHomeDir() (string, error)
 	Getwd() (string, error)
 	EvalSymlinks(path string) (string, error)
+	MkdirAll(path string, perm os.FileMode) error
 	ReadFile(name string) ([]byte, error)
+	WriteFile(name string, data []byte, perm os.FileMode) error
+	Rename(oldpath, newpath string) error
 	Stat(name string) (os.FileInfo, error)
 	Lstat(name string) (os.FileInfo, error)
 	Readlink(name string) (string, error)
@@ -53,6 +56,14 @@ func (u VanishTargets) Run() error {
 		return err
 	}
 
+	statePath, state, lock, err := loadStateLocked(u.FileSystem)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Unlock()
+	}()
+
 	for _, target := range workspace.Targets {
 		workspaceTargetPath := filepath.Join(workspace.Root, target)
 		storeTargetPath, err := config.StoreTargetPath(workspaceID, target)
@@ -65,7 +76,15 @@ func (u VanishTargets) Run() error {
 			return fmt.Errorf("%s: %w", target, err)
 		}
 
+		if err := state.RemoveLease(workspaceID, target); err != nil {
+			return err
+		}
+
 		fmt.Fprintf(u.Stdout, "%s target: %s\n", status, target)
+	}
+
+	if err := persistState(u.FileSystem, statePath, state); err != nil {
+		return err
 	}
 
 	return nil

@@ -33,6 +33,10 @@ func (OSFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error 
 	return os.WriteFile(name, data, perm)
 }
 
+func (OSFileSystem) Rename(oldpath, newpath string) error {
+	return os.Rename(oldpath, newpath)
+}
+
 func (OSFileSystem) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }

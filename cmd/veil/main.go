@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/kazuhideoki/veil/internal/infra"
 	"github.com/kazuhideoki/veil/internal/usecase"
@@ -193,8 +194,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.EmergeTargets{
-			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
+			FileSystem:     infra.OSFileSystem{},
+			Stdout:         stdout,
+			CleanerStarter: infra.ExecTTLCleanerStarter{},
 		}
 
 		return runner.Run()
@@ -231,6 +233,32 @@ func run(args []string, stdout, stderr io.Writer) error {
 		runner := usecase.StatusTargets{
 			FileSystem: infra.OSFileSystem{},
 			Stdout:     stdout,
+		}
+
+		return runner.Run()
+	case "ttl-cleaner":
+		cleanerFlags := flag.NewFlagSet("ttl-cleaner", flag.ContinueOnError)
+		cleanerFlags.SetOutput(stderr)
+
+		if err := cleanerFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if cleanerFlags.NArg() != 0 {
+			return fmt.Errorf("ttl-cleaner does not accept positional arguments: %v", cleanerFlags.Args())
+		}
+
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve home directory: %w", err)
+		}
+
+		runner := usecase.RunTTLCleaner{
+			FileSystem: infra.OSFileSystem{},
+			Lock: &infra.FileTTLCleanerLock{
+				Path: filepath.Join(homeDir, ".veil", "ttl-cleaner.lock"),
+			},
+			Stdout: stdout,
 		}
 
 		return runner.Run()

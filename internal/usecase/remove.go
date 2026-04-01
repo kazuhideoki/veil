@@ -12,6 +12,7 @@ type removeFileSystem interface {
 	activeWorkspaceFileSystem
 	MkdirAll(path string, perm os.FileMode) error
 	ReadFile(name string) ([]byte, error)
+	Rename(oldpath, newpath string) error
 	Stat(name string) (os.FileInfo, error)
 	Lstat(name string) (os.FileInfo, error)
 	Readlink(name string) (string, error)
@@ -59,6 +60,10 @@ func (u RemoveTarget) Run() error {
 		return err
 	}
 
+	if err := clearTargetLease(u.FileSystem, ctx.workspaceID, change.target); err != nil {
+		return err
+	}
+
 	fmt.Fprintf(u.Stdout, "removed target: %s\n", change.target)
 	return nil
 }
@@ -82,6 +87,10 @@ func (u PurgeTarget) Run() error {
 	}
 
 	if err := runPostCommitChanges([]preparedTargetChange{change}); err != nil {
+		return err
+	}
+
+	if err := clearTargetLease(u.FileSystem, ctx.workspaceID, change.target); err != nil {
 		return err
 	}
 
@@ -318,4 +327,20 @@ func cleanupEmptyStoreDirs(fs interface{ Remove(name string) error }, storeTarge
 		}
 		current = next
 	}
+}
+
+func clearTargetLease(fs stateFileSystem, workspaceID, target string) error {
+	statePath, state, lock, err := loadStateLocked(fs)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = lock.Unlock()
+	}()
+
+	if err := state.RemoveLease(workspaceID, target); err != nil {
+		return err
+	}
+
+	return persistState(fs, statePath, state)
 }
