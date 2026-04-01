@@ -18,6 +18,10 @@ func (OSFileSystem) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
+func (OSFileSystem) ReadDir(name string) ([]os.DirEntry, error) {
+	return os.ReadDir(name)
+}
+
 func (OSFileSystem) Getwd() (string, error) {
 	return os.Getwd()
 }

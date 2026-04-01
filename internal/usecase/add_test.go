@@ -101,6 +101,109 @@ func TestAddTargetMovesFileIntoStoreAndUpdatesConfig(t *testing.T) {
 	}
 }
 
+func TestAddTargetMovesDirectDirectoryFilesIntoStoreAndUpdatesConfig(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "config", "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	storeRoot := filepath.Join(tempHome, "veil-store")
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), "version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n[workspaces.myapp]\nroot = "+workspaceRootQuoted(resolvedWorkspaceRoot)+"\ntargets = []\n")
+
+	directTargets := map[string]string{
+		filepath.Join(workspaceRoot, "config", ".env"):                 "TOKEN=test\n",
+		filepath.Join(workspaceRoot, "config", "service-account.json"): "{\"key\":\"value\"}\n",
+	}
+	for path, body := range directTargets {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q) returned error: %v", path, err)
+		}
+	}
+
+	nestedPath := filepath.Join(workspaceRoot, "config", "nested", "ignored.txt")
+	if err := os.WriteFile(nestedPath, []byte("ignored\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	uc := AddTarget{
+		FileSystem:     infra.OSFileSystem{},
+		TrackedChecker: stubTrackedChecker{},
+		Stdout:         &stdout,
+		TargetPath:     "config",
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	for path := range directTargets {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("workspace target still exists: %s, stat error = %v", path, err)
+		}
+	}
+
+	if data, err := os.ReadFile(nestedPath); err != nil {
+		t.Fatalf("ReadFile(nested) returned error: %v", err)
+	} else if string(data) != "ignored\n" {
+		t.Fatalf("nested data = %q", string(data))
+	}
+
+	storeChecks := map[string]string{
+		filepath.Join(storeRoot, "workspaces", "myapp", "config", ".env"):                 "TOKEN=test\n",
+		filepath.Join(storeRoot, "workspaces", "myapp", "config", "service-account.json"): "{\"key\":\"value\"}\n",
+	}
+	for path, want := range storeChecks {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) returned error: %v", path, err)
+		}
+		if string(data) != want {
+			t.Fatalf("store data = %q, want %q", string(data), want)
+		}
+	}
+
+	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+
+	if !strings.Contains(string(configData), "targets = [\"config/.env\", \"config/service-account.json\"]") {
+		t.Fatalf("config contents = %q", string(configData))
+	}
+
+	for _, want := range []string{
+		"skipped nested directory: config/nested",
+		"added target: config/.env",
+		"added target: config/service-account.json",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
+	}
+}
+
 func TestAddTargetReturnsErrorWhenVeilIsNotInitialized(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
@@ -212,6 +315,90 @@ func TestAddTargetReturnsErrorWhenTargetIsTrackedByGit(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "target is tracked by git") {
 		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestAddTargetDirectoryIsAllOrNothingWhenAnyChildConflicts(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	storeRoot := filepath.Join(tempHome, "veil-store")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "secrets"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), "version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n[workspaces.myapp]\nroot = "+workspaceRootQuoted(resolvedWorkspaceRoot)+"\ntargets = []\n")
+
+	firstTargetPath := filepath.Join(workspaceRoot, "secrets", "a.env")
+	secondTargetPath := filepath.Join(workspaceRoot, "secrets", "b.env")
+	for _, targetPath := range []string{firstTargetPath, secondTargetPath} {
+		if err := os.WriteFile(targetPath, []byte("TOKEN=test\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q) returned error: %v", targetPath, err)
+		}
+	}
+
+	conflictingStorePath := filepath.Join(storeRoot, "workspaces", "myapp", "secrets", "b.env")
+	if err := os.MkdirAll(filepath.Dir(conflictingStorePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(conflictingStorePath, []byte("existing\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	uc := AddTarget{
+		FileSystem:     infra.OSFileSystem{},
+		TrackedChecker: stubTrackedChecker{},
+		Stdout:         &bytes.Buffer{},
+		TargetPath:     "secrets",
+	}
+
+	err = uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+
+	if !strings.Contains(err.Error(), "store target already exists: secrets/b.env") {
+		t.Fatalf("error = %q", err)
+	}
+
+	for _, targetPath := range []string{firstTargetPath, secondTargetPath} {
+		if data, readErr := os.ReadFile(targetPath); readErr != nil {
+			t.Fatalf("ReadFile(%q) returned error: %v", targetPath, readErr)
+		} else if string(data) != "TOKEN=test\n" {
+			t.Fatalf("workspace data = %q", string(data))
+		}
+	}
+
+	firstStorePath := filepath.Join(storeRoot, "workspaces", "myapp", "secrets", "a.env")
+	if _, err := os.Stat(firstStorePath); !os.IsNotExist(err) {
+		t.Fatalf("first store target exists after failure, stat error = %v", err)
+	}
+
+	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	if !strings.Contains(string(configData), "targets = []") {
+		t.Fatalf("config contents = %q", string(configData))
 	}
 }
 
@@ -486,6 +673,10 @@ func (fs failingConfigWriteFS) Getwd() (string, error) {
 
 func (fs failingConfigWriteFS) EvalSymlinks(path string) (string, error) {
 	return filepath.EvalSymlinks(path)
+}
+
+func (fs failingConfigWriteFS) ReadDir(name string) ([]os.DirEntry, error) {
+	return os.ReadDir(name)
 }
 
 func (fs failingConfigWriteFS) MkdirAll(path string, perm os.FileMode) error {

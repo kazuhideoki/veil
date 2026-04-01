@@ -8,7 +8,7 @@ Usage:
 
 Commands:
   init      Initialize config and add the current workspace
-  add       Move a target file into Veil store and register it
+  add       Move a target file, or a directory's direct files, into Veil store and register them
   edit      Open a registered store file with $EDITOR
   remove    Stop managing a target and restore it into the workspace
   purge     Delete a registered target from Veil store and config

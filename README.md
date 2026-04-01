@@ -35,6 +35,9 @@ veil init
 # move an existing secret file into Veil management
 veil add .env
 
+# move all direct files in a directory into Veil management
+veil add config/secrets
+
 # make managed files appear in the current workspace
 veil emerge
 
