@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/kazuhideoki/veil/internal/domain"
@@ -35,22 +36,18 @@ type EmergeTargets struct {
 	Stdout         io.Writer
 	Now            func() time.Time
 	CleanerStarter ttlCleanerStarter
+	AllWorkspaces  bool
+}
+
+type emergeWorkspace struct {
+	id        string
+	workspace domain.Workspace
 }
 
 func (u EmergeTargets) Run() error {
 	_, config, err := loadConfig(u.FileSystem)
 	if err != nil {
 		return err
-	}
-
-	currentDir, err := u.FileSystem.Getwd()
-	if err != nil {
-		return fmt.Errorf("resolve current directory: %w", err)
-	}
-
-	currentDir, err = u.FileSystem.EvalSymlinks(currentDir)
-	if err != nil {
-		return fmt.Errorf("canonicalize current directory: %w", err)
 	}
 
 	homeDir, err := u.FileSystem.UserHomeDir()
@@ -61,7 +58,7 @@ func (u EmergeTargets) Run() error {
 	config.StorePath = expandHomeDir(config.StorePath, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 
-	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
+	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
 	if err != nil {
 		return err
 	}
@@ -75,52 +72,58 @@ func (u EmergeTargets) Run() error {
 	}()
 
 	now := currentTime(u.Now)
-	ttl, err := config.EffectiveTTL(workspace)
-	if err != nil {
-		return err
-	}
-
 	originalState := cloneState(state)
 	createdTargetPaths := []string{}
 
-	for _, target := range workspace.Targets {
-		storeTargetPath, err := config.StoreTargetPath(workspaceID, target)
+	for _, entry := range workspaces {
+		ttl, err := config.EffectiveTTL(entry.workspace)
 		if err != nil {
-			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, err)
+			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeWorkspaceError(u.AllWorkspaces, entry.id, err))
+		}
+		if err := ensureWorkspaceRootExists(u.FileSystem, entry.workspace.Root); err != nil {
+			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeWorkspaceError(u.AllWorkspaces, entry.id, err))
 		}
 
-		storeInfo, err := u.FileSystem.Stat(storeTargetPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, fmt.Errorf("store target does not exist: %s", target))
+		for _, target := range entry.workspace.Targets {
+			storeTargetPath, err := config.StoreTargetPath(entry.id, target)
+			if err != nil {
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err))
 			}
-			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, fmt.Errorf("stat store target: %w", err))
-		}
 
-		if !storeInfo.Mode().IsRegular() {
-			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, fmt.Errorf("store target must be a regular file: %s", target))
-		}
+			storeInfo, err := u.FileSystem.Stat(storeTargetPath)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("store target does not exist: %s", target)))
+				}
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("stat store target: %w", err)))
+			}
 
-		workspaceTargetPath := filepath.Join(workspace.Root, target)
-		// TODO: Reject targets whose resolved parent path escapes workspace.Root via symlinked directories.
-		if err := u.FileSystem.MkdirAll(filepath.Dir(workspaceTargetPath), 0o755); err != nil {
-			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, fmt.Errorf("create workspace target directory: %w", err))
-		}
+			if !storeInfo.Mode().IsRegular() {
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("store target must be a regular file: %s", target)))
+			}
 
-		created, err := ensureEmergedTarget(u.FileSystem, workspaceTargetPath, storeTargetPath)
-		if err != nil {
-			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, fmt.Errorf("%s: %w", target, err))
-		}
+			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
+			// TODO: Reject targets whose resolved parent path escapes workspace.Root via symlinked directories.
+			if err := u.FileSystem.MkdirAll(filepath.Dir(workspaceTargetPath), 0o755); err != nil {
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("create workspace target directory: %w", err)))
+			}
 
-		if created {
-			createdTargetPaths = append(createdTargetPaths, workspaceTargetPath)
-			fmt.Fprintf(u.Stdout, "emerged target: %s\n", target)
-		} else {
-			fmt.Fprintf(u.Stdout, "already emerged target: %s\n", target)
-		}
+			created, err := ensureEmergedTarget(u.FileSystem, workspaceTargetPath, storeTargetPath)
+			if err != nil {
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("%s: %w", target, err)))
+			}
 
-		if err := state.UpsertLease(workspaceID, target, now, now.Add(ttl)); err != nil {
-			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, err)
+			targetLabel := emergeTargetLabel(u.AllWorkspaces, entry.id, target)
+			if created {
+				createdTargetPaths = append(createdTargetPaths, workspaceTargetPath)
+				fmt.Fprintf(u.Stdout, "emerged target: %s\n", targetLabel)
+			} else {
+				fmt.Fprintf(u.Stdout, "already emerged target: %s\n", targetLabel)
+			}
+
+			if err := state.UpsertLease(entry.id, target, now, now.Add(ttl)); err != nil {
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err))
+			}
 		}
 	}
 
@@ -132,6 +135,85 @@ func (u EmergeTargets) Run() error {
 		if err := u.CleanerStarter.Start(); err != nil {
 			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, fmt.Errorf("start ttl cleaner: %w", err))
 		}
+	}
+
+	return nil
+}
+
+func resolveEmergeWorkspaces(fs emergeFileSystem, config domain.Config, allWorkspaces bool) ([]emergeWorkspace, error) {
+	if allWorkspaces {
+		ids := make([]string, 0, len(config.Workspaces))
+		for id := range config.Workspaces {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+
+		workspaces := make([]emergeWorkspace, 0, len(ids))
+		for _, id := range ids {
+			workspaces = append(workspaces, emergeWorkspace{
+				id:        id,
+				workspace: config.Workspaces[id],
+			})
+		}
+
+		return workspaces, nil
+	}
+
+	currentDir, err := fs.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("resolve current directory: %w", err)
+	}
+
+	currentDir, err = fs.EvalSymlinks(currentDir)
+	if err != nil {
+		return nil, fmt.Errorf("canonicalize current directory: %w", err)
+	}
+
+	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
+	if err != nil {
+		return nil, err
+	}
+
+	return []emergeWorkspace{{
+		id:        workspaceID,
+		workspace: workspace,
+	}}, nil
+}
+
+func emergeTargetLabel(allWorkspaces bool, workspaceID, target string) string {
+	if !allWorkspaces {
+		return target
+	}
+
+	return workspaceID + ":" + target
+}
+
+func wrapEmergeWorkspaceError(allWorkspaces bool, workspaceID string, err error) error {
+	if !allWorkspaces {
+		return err
+	}
+
+	return fmt.Errorf("%s: %w", workspaceID, err)
+}
+
+func wrapEmergeTargetError(allWorkspaces bool, workspaceID, target string, err error) error {
+	if !allWorkspaces {
+		return err
+	}
+
+	return fmt.Errorf("%s: %w", emergeTargetLabel(allWorkspaces, workspaceID, target), err)
+}
+
+func ensureWorkspaceRootExists(fs emergeFileSystem, workspaceRoot string) error {
+	info, err := fs.Stat(workspaceRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("workspace root does not exist: %s", workspaceRoot)
+		}
+		return fmt.Errorf("stat workspace root: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace root must be a directory: %s", workspaceRoot)
 	}
 
 	return nil

@@ -13,7 +13,7 @@ Commands:
   remove    Stop managing a target and restore it into the workspace
   purge     Delete a registered target from Veil store and config
   workspace Remove or purge the active workspace registration
-  emerge    Create workspace symlinks for registered targets
+  emerge    Create workspace symlinks for registered targets (--all for every workspace)
   status    Show current target states for the active workspace
   vanish    Remove Veil-managed workspace symlinks for registered targets
 

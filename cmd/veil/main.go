@@ -185,6 +185,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		emergeFlags := flag.NewFlagSet("emerge", flag.ContinueOnError)
 		emergeFlags.SetOutput(stderr)
 
+		var allWorkspaces bool
+		emergeFlags.BoolVar(&allWorkspaces, "all", false, "emerge registered targets for all workspaces")
+
 		if err := emergeFlags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -197,6 +200,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			FileSystem:     infra.OSFileSystem{},
 			Stdout:         stdout,
 			CleanerStarter: infra.ExecTTLCleanerStarter{},
+			AllWorkspaces:  allWorkspaces,
 		}
 
 		return runner.Run()
