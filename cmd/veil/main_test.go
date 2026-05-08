@@ -225,8 +225,8 @@ func TestRunEmergeAllCreatesSymlinksForEveryWorkspace(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"emerged target: alpha:.env",
-		"emerged target: beta:config/app.json",
+		"emerged          repo: alpha  file: .env",
+		"emerged          repo: beta   file: config/app.json",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)

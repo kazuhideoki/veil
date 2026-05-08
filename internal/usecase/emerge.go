@@ -74,6 +74,7 @@ func (u EmergeTargets) Run() error {
 	now := currentTime(u.Now)
 	originalState := cloneState(state)
 	createdTargetPaths := []string{}
+	outputLayout := newEmergeOutputLayout(u.AllWorkspaces, workspaces)
 
 	for _, entry := range workspaces {
 		ttl, err := config.EffectiveTTL(entry.workspace)
@@ -116,10 +117,8 @@ func (u EmergeTargets) Run() error {
 			targetLabel := emergeTargetLabel(u.AllWorkspaces, entry.id, target)
 			if created {
 				createdTargetPaths = append(createdTargetPaths, workspaceTargetPath)
-				fmt.Fprintf(u.Stdout, "emerged target: %s\n", targetLabel)
-			} else {
-				fmt.Fprintf(u.Stdout, "already emerged target: %s\n", targetLabel)
 			}
+			outputLayout.writeTarget(u.Stdout, entry.id, targetLabel, target, created)
 
 			if err := state.UpsertLease(entry.id, target, now, now.Add(ttl)); err != nil {
 				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err))
@@ -138,6 +137,44 @@ func (u EmergeTargets) Run() error {
 	}
 
 	return nil
+}
+
+type emergeOutputLayout struct {
+	allWorkspaces  bool
+	actionWidth    int
+	workspaceWidth int
+}
+
+func newEmergeOutputLayout(allWorkspaces bool, workspaces []emergeWorkspace) emergeOutputLayout {
+	layout := emergeOutputLayout{
+		allWorkspaces: allWorkspaces,
+		actionWidth:   len("already emerged"),
+	}
+	if !allWorkspaces {
+		return layout
+	}
+
+	for _, entry := range workspaces {
+		if len(entry.id) > layout.workspaceWidth {
+			layout.workspaceWidth = len(entry.id)
+		}
+	}
+
+	return layout
+}
+
+func (l emergeOutputLayout) writeTarget(w io.Writer, workspaceID, targetLabel, target string, created bool) {
+	action := "emerged"
+	if !created {
+		action = "already emerged"
+	}
+
+	if !l.allWorkspaces {
+		fmt.Fprintf(w, "%s target: %s\n", action, targetLabel)
+		return
+	}
+
+	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s\n", l.actionWidth, action, l.workspaceWidth, workspaceID, target)
 }
 
 func resolveEmergeWorkspaces(fs emergeFileSystem, config domain.Config, allWorkspaces bool) ([]emergeWorkspace, error) {

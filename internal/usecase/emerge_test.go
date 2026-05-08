@@ -590,8 +590,8 @@ func TestEmergeTargetsCanEmergeAllWorkspaces(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"emerged target: alpha:.env",
-		"emerged target: beta:config/app.json",
+		"emerged          repo: alpha  file: .env",
+		"emerged          repo: beta   file: config/app.json",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
@@ -616,6 +616,40 @@ func TestEmergeTargetsCanEmergeAllWorkspaces(t *testing.T) {
 		if !lease.ExpiresAt.Equal(now.Add(24 * time.Hour)) {
 			t.Fatalf("expires_at = %v, want %v", lease.ExpiresAt, now.Add(24*time.Hour))
 		}
+	}
+}
+
+func TestEmergeOutputLayoutAlignsAllWorkspaceColumns(t *testing.T) {
+	workspaces := []emergeWorkspace{
+		{id: "short"},
+		{id: "longer-repo"},
+	}
+	layout := newEmergeOutputLayout(true, workspaces)
+
+	var stdout bytes.Buffer
+	layout.writeTarget(&stdout, "short", "short:.env", ".env", true)
+	layout.writeTarget(&stdout, "longer-repo", "longer-repo:config/app.json", "config/app.json", false)
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("lines = %q, want 2 lines", lines)
+	}
+
+	want := []string{
+		"emerged          repo: short        file: .env",
+		"already emerged  repo: longer-repo  file: config/app.json",
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, lines[i], want[i])
+		}
+	}
+
+	if strings.Index(lines[0], "repo:") != strings.Index(lines[1], "repo:") {
+		t.Fatalf("repo columns are not aligned: %q", lines)
+	}
+	if strings.Index(lines[0], "file:") != strings.Index(lines[1], "file:") {
+		t.Fatalf("file columns are not aligned: %q", lines)
 	}
 }
 
