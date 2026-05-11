@@ -653,7 +653,7 @@ func TestEmergeOutputLayoutAlignsAllWorkspaceColumns(t *testing.T) {
 	}
 }
 
-func TestEmergeTargetsAllWorkspacesRollsBackOnFailure(t *testing.T) {
+func TestEmergeTargetsAllWorkspacesContinuesAfterTargetFailure(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 
@@ -705,9 +705,10 @@ func TestEmergeTargetsAllWorkspacesRollsBackOnFailure(t *testing.T) {
 		}
 	}()
 
+	var stdout bytes.Buffer
 	uc := EmergeTargets{
 		FileSystem:    infra.OSFileSystem{},
-		Stdout:        &bytes.Buffer{},
+		Stdout:        &stdout,
 		AllWorkspaces: true,
 	}
 
@@ -722,20 +723,38 @@ func TestEmergeTargetsAllWorkspacesRollsBackOnFailure(t *testing.T) {
 		t.Fatalf("error = %q", err)
 	}
 
-	if _, err := os.Lstat(filepath.Join(alphaWorkspaceRoot, ".env")); !os.IsNotExist(err) {
-		t.Fatalf("alpha workspace symlink still exists, err = %v", err)
+	linkPath := filepath.Join(alphaWorkspaceRoot, ".env")
+	gotTarget, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("Readlink(%q) returned error: %v", linkPath, err)
+	}
+	if gotTarget != alphaStorePath {
+		t.Fatalf("link target = %q, want %q", gotTarget, alphaStorePath)
+	}
+
+	for _, want := range []string{
+		"emerged          repo: alpha  file: .env",
+		"failed           repo: beta   file: config/app.json",
+		"store target does not exist",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
 	}
 
 	_, state, err := loadState(infra.OSFileSystem{})
 	if err != nil {
 		t.Fatalf("loadState() returned error: %v", err)
 	}
-	if got := len(state.Leases); got != 0 {
-		t.Fatalf("lease count = %d, want 0", got)
+	if got := len(state.Leases); got != 1 {
+		t.Fatalf("lease count = %d, want 1", got)
+	}
+	if _, ok, err := state.FindLease("alpha", ".env"); err != nil || !ok {
+		t.Fatalf("FindLease(alpha, .env) = _, %v, %v; want lease", ok, err)
 	}
 }
 
-func TestEmergeTargetsAllWorkspacesRejectsMissingWorkspaceRoot(t *testing.T) {
+func TestEmergeTargetsAllWorkspacesContinuesAfterMissingWorkspaceRoot(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 
@@ -789,9 +808,10 @@ func TestEmergeTargetsAllWorkspacesRejectsMissingWorkspaceRoot(t *testing.T) {
 		}
 	}()
 
+	var stdout bytes.Buffer
 	uc := EmergeTargets{
 		FileSystem:    infra.OSFileSystem{},
-		Stdout:        &bytes.Buffer{},
+		Stdout:        &stdout,
 		AllWorkspaces: true,
 	}
 
@@ -806,8 +826,23 @@ func TestEmergeTargetsAllWorkspacesRejectsMissingWorkspaceRoot(t *testing.T) {
 		t.Fatalf("error = %q", err)
 	}
 
-	if _, err := os.Lstat(filepath.Join(alphaWorkspaceRoot, ".env")); !os.IsNotExist(err) {
-		t.Fatalf("alpha workspace symlink still exists, err = %v", err)
+	linkPath := filepath.Join(alphaWorkspaceRoot, ".env")
+	gotTarget, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("Readlink(%q) returned error: %v", linkPath, err)
+	}
+	if gotTarget != alphaStorePath {
+		t.Fatalf("link target = %q, want %q", gotTarget, alphaStorePath)
+	}
+
+	for _, want := range []string{
+		"emerged          repo: alpha  file: .env",
+		"failed           repo: beta",
+		"workspace root does not exist",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
 	}
 
 	if _, err := os.Stat(missingWorkspaceRoot); !os.IsNotExist(err) {
@@ -818,8 +853,11 @@ func TestEmergeTargetsAllWorkspacesRejectsMissingWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadState() returned error: %v", err)
 	}
-	if got := len(state.Leases); got != 0 {
-		t.Fatalf("lease count = %d, want 0", got)
+	if got := len(state.Leases); got != 1 {
+		t.Fatalf("lease count = %d, want 1", got)
+	}
+	if _, ok, err := state.FindLease("alpha", ".env"); err != nil || !ok {
+		t.Fatalf("FindLease(alpha, .env) = _, %v, %v; want lease", ok, err)
 	}
 }
 
