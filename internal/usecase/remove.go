@@ -330,13 +330,10 @@ func cleanupEmptyStoreDirs(fs interface{ Remove(name string) error }, storeTarge
 }
 
 func clearTargetLease(fs stateFileSystem, workspaceID, target string) error {
-	statePath, state, lock, err := loadStateLocked(fs)
+	statePath, state, err := loadState(fs)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
 
 	if err := state.RemoveLease(workspaceID, target); err != nil {
 		return err

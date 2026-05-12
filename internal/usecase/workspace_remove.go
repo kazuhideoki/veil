@@ -164,13 +164,10 @@ func finishWorkspaceChanges(fs removeFileSystem, ctx *activeWorkspaceContext, ch
 }
 
 func clearWorkspaceLeases(fs stateFileSystem, workspaceID string) error {
-	statePath, state, lock, err := loadStateLocked(fs)
+	statePath, state, err := loadState(fs)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
 
 	if err := state.RemoveWorkspaceLeases(workspaceID); err != nil {
 		return err

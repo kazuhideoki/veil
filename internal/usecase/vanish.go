@@ -56,13 +56,10 @@ func (u VanishTargets) Run() error {
 		return err
 	}
 
-	statePath, state, lock, err := loadStateLocked(u.FileSystem)
+	statePath, state, err := loadState(u.FileSystem)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
 
 	for _, target := range workspace.Targets {
 		workspaceTargetPath := filepath.Join(workspace.Root, target)
