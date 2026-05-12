@@ -68,6 +68,20 @@ Managed source files are derived by convention:
 <store_path>/workspaces/<workspace_id>/<target-relative-path>
 ```
 
+## Development
+
+Run the test suite:
+
+```bash
+go test ./...
+```
+
+Update the local `./veil` binary from source:
+
+```bash
+go build -o veil ./cmd/veil
+```
+
 ## Scope
 
 Veil is intentionally narrow in scope:
