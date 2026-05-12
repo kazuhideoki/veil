@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/kazuhideoki/veil/internal/domain"
 )
@@ -24,79 +23,22 @@ type stateFileSystem interface {
 	Remove(name string) error
 }
 
-type stateLock struct {
-	file *os.File
-}
-
-func (l stateLock) Unlock() error {
-	if l.file == nil {
-		return nil
-	}
-
-	if err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN); err != nil {
-		_ = l.file.Close()
-		return err
-	}
-
-	return l.file.Close()
-}
-
-func statePaths(fs stateReaderFileSystem) (string, string, error) {
+func statePath(fs stateReaderFileSystem) (string, error) {
 	homeDir, err := fs.UserHomeDir()
 	if err != nil {
-		return "", "", fmt.Errorf("resolve home directory: %w", err)
+		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	statePath := filepath.Join(homeDir, ".veil", "state.toml")
-	lockPath := filepath.Join(homeDir, ".veil", "state.lock")
-	return statePath, lockPath, nil
-}
-
-func lockState(fs stateReaderFileSystem) (stateLock, error) {
-	_, lockPath, err := statePaths(fs)
-	if err != nil {
-		return stateLock{}, err
-	}
-
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		return stateLock{}, fmt.Errorf("create state lock directory: %w", err)
-	}
-
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return stateLock{}, fmt.Errorf("open state lock file: %w", err)
-	}
-
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
-		_ = file.Close()
-		return stateLock{}, fmt.Errorf("lock state file: %w", err)
-	}
-
-	return stateLock{file: file}, nil
+	return filepath.Join(homeDir, ".veil", "state.toml"), nil
 }
 
 func loadState(fs stateReaderFileSystem) (string, domain.State, error) {
-	statePath, _, err := statePaths(fs)
+	statePath, err := statePath(fs)
 	if err != nil {
 		return "", domain.State{}, err
 	}
 
 	return loadStateAtPath(fs, statePath)
-}
-
-func loadStateLocked(fs stateReaderFileSystem) (string, domain.State, stateLock, error) {
-	lock, err := lockState(fs)
-	if err != nil {
-		return "", domain.State{}, stateLock{}, err
-	}
-
-	statePath, state, err := loadState(fs)
-	if err != nil {
-		_ = lock.Unlock()
-		return "", domain.State{}, stateLock{}, err
-	}
-
-	return statePath, state, lock, nil
 }
 
 func loadStateAtPath(fs stateReaderFileSystem, statePath string) (string, domain.State, error) {

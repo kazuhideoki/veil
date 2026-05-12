@@ -21,7 +21,7 @@ Veil uses a simple model:
 
 - Store the real secret files outside the workspace.
 - Link them into the workspace only when needed.
-- Remove those links explicitly or automatically after a TTL expires.
+- Remove those links explicitly, or clean up expired links the next time Veil runs.
 
 For the application or tool using the file, nothing special changes. It still sees the file at the usual path.
 The initial design targets personal development on macOS and uses iCloud Drive as the default backing store so the same secret files can sync across devices with minimal setup.

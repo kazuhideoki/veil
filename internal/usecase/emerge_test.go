@@ -340,7 +340,7 @@ func TestEmergeTargetsKeepsEquivalentRelativeSymlink(t *testing.T) {
 	}
 }
 
-func TestEmergeTargetsWritesLeasesAndStartsCleaner(t *testing.T) {
+func TestEmergeTargetsWritesLeases(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 
@@ -380,20 +380,14 @@ func TestEmergeTargetsWritesLeasesAndStartsCleaner(t *testing.T) {
 	}()
 
 	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	starter := &stubTTLCleanerStarter{}
 	uc := EmergeTargets{
-		FileSystem:     infra.OSFileSystem{},
-		Stdout:         &bytes.Buffer{},
-		Now:            func() time.Time { return now },
-		CleanerStarter: starter,
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &bytes.Buffer{},
+		Now:        func() time.Time { return now },
 	}
 
 	if err := uc.Run(); err != nil {
 		t.Fatalf("Run() returned error: %v", err)
-	}
-
-	if starter.startCalls != 1 {
-		t.Fatalf("start calls = %d, want 1", starter.startCalls)
 	}
 
 	state := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
@@ -463,10 +457,9 @@ func TestEmergeTargetsRefreshesExistingLease(t *testing.T) {
 
 	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	uc := EmergeTargets{
-		FileSystem:     infra.OSFileSystem{},
-		Stdout:         &bytes.Buffer{},
-		Now:            func() time.Time { return now },
-		CleanerStarter: &stubTTLCleanerStarter{},
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &bytes.Buffer{},
+		Now:        func() time.Time { return now },
 	}
 
 	if err := uc.Run(); err != nil {
@@ -550,22 +543,16 @@ func TestEmergeTargetsCanEmergeAllWorkspaces(t *testing.T) {
 	}()
 
 	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	starter := &stubTTLCleanerStarter{}
 	var stdout bytes.Buffer
 	uc := EmergeTargets{
-		FileSystem:     infra.OSFileSystem{},
-		Stdout:         &stdout,
-		Now:            func() time.Time { return now },
-		CleanerStarter: starter,
-		AllWorkspaces:  true,
+		FileSystem:    infra.OSFileSystem{},
+		Stdout:        &stdout,
+		Now:           func() time.Time { return now },
+		AllWorkspaces: true,
 	}
 
 	if err := uc.Run(); err != nil {
 		t.Fatalf("Run() returned error: %v", err)
-	}
-
-	if starter.startCalls != 1 {
-		t.Fatalf("start calls = %d, want 1", starter.startCalls)
 	}
 
 	for linkPath, wantTarget := range map[string]string{
@@ -926,82 +913,5 @@ func TestEmergeTargetsRollsBackNewSymlinkWhenStateWriteFails(t *testing.T) {
 	}
 	if got := len(state.Leases); got != 0 {
 		t.Fatalf("lease count = %d, want 0", got)
-	}
-}
-
-func TestEmergeTargetsRestoresPreviousStateWhenCleanerStartFails(t *testing.T) {
-	tempHome := t.TempDir()
-	t.Setenv("HOME", tempHome)
-
-	storeRoot := filepath.Join(tempHome, "veil-store")
-	workspaceRoot := filepath.Join(tempHome, "myapp")
-	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll() returned error: %v", err)
-	}
-
-	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
-	if err != nil {
-		t.Fatalf("EvalSymlinks() returned error: %v", err)
-	}
-
-	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), "version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n[workspaces.myapp]\nroot = "+workspaceRootQuoted(resolvedWorkspaceRoot)+"\ntargets = [\".env\"]\n")
-
-	storeEnvPath := filepath.Join(storeRoot, "workspaces", "myapp", ".env")
-	if err := os.MkdirAll(filepath.Dir(storeEnvPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll() returned error: %v", err)
-	}
-	if err := os.WriteFile(storeEnvPath, []byte("TOKEN=test\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile() returned error: %v", err)
-	}
-
-	originalState := domain.DefaultState()
-	originalMountedAt := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
-	mustUpsertLease(t, &originalState, "myapp", ".env", originalMountedAt, originalMountedAt.Add(time.Hour))
-	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), originalState)
-
-	previousWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() returned error: %v", err)
-	}
-
-	if err := os.Chdir(workspaceRoot); err != nil {
-		t.Fatalf("Chdir() returned error: %v", err)
-	}
-	defer func() {
-		if err := os.Chdir(previousWD); err != nil {
-			t.Fatalf("restore Chdir() returned error: %v", err)
-		}
-	}()
-
-	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	uc := EmergeTargets{
-		FileSystem:     infra.OSFileSystem{},
-		Stdout:         &bytes.Buffer{},
-		Now:            func() time.Time { return now },
-		CleanerStarter: failingCleanerStarter{err: errCleanerStartFailed},
-	}
-
-	err = uc.Run()
-	if err == nil {
-		t.Fatal("Run() returned nil error")
-	}
-	if !strings.Contains(err.Error(), "start ttl cleaner") {
-		t.Fatalf("error = %q", err)
-	}
-
-	if _, err := os.Lstat(filepath.Join(workspaceRoot, ".env")); !os.IsNotExist(err) {
-		t.Fatalf("workspace symlink still exists, err = %v", err)
-	}
-
-	state := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
-	lease, ok, err := state.FindLease("myapp", ".env")
-	if err != nil {
-		t.Fatalf("FindLease() returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("lease not found")
-	}
-	if !lease.MountedAt.Equal(originalMountedAt) {
-		t.Fatalf("mounted_at = %v, want %v", lease.MountedAt, originalMountedAt)
 	}
 }

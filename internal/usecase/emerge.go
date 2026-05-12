@@ -27,16 +27,11 @@ type emergeFileSystem interface {
 	Remove(name string) error
 }
 
-type ttlCleanerStarter interface {
-	Start() error
-}
-
 type EmergeTargets struct {
-	FileSystem     emergeFileSystem
-	Stdout         io.Writer
-	Now            func() time.Time
-	CleanerStarter ttlCleanerStarter
-	AllWorkspaces  bool
+	FileSystem    emergeFileSystem
+	Stdout        io.Writer
+	Now           func() time.Time
+	AllWorkspaces bool
 }
 
 type emergeWorkspace struct {
@@ -63,13 +58,10 @@ func (u EmergeTargets) Run() error {
 		return err
 	}
 
-	statePath, state, lock, err := loadStateLocked(u.FileSystem)
+	statePath, state, err := loadState(u.FileSystem)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
 
 	now := currentTime(u.Now)
 	originalState := cloneState(state)
@@ -190,12 +182,6 @@ func (u EmergeTargets) Run() error {
 
 	if err := persistState(u.FileSystem, statePath, state); err != nil {
 		return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, err)
-	}
-
-	if u.CleanerStarter != nil {
-		if err := u.CleanerStarter.Start(); err != nil {
-			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, fmt.Errorf("start ttl cleaner: %w", err))
-		}
 	}
 
 	if emergeErr != nil {

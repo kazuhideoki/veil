@@ -54,13 +54,10 @@ func (u StatusTargets) Run() error {
 		return err
 	}
 
-	_, state, lock, err := loadStateLocked(statusStateFileSystem{statusFileSystem: u.FileSystem})
+	_, state, err := loadState(statusStateFileSystem{statusFileSystem: u.FileSystem})
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
 
 	now := currentTime(u.Now)
 
