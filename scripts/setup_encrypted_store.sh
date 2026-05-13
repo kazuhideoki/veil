@@ -14,11 +14,13 @@ Options:
   --bundle-path PATH        sparsebundle path (default: iCloud Drive/VeilStore.sparsebundle)
   --mount-path PATH         local mount path for Veil (default: ~/Library/Application Support/veil/mounts/default)
   --session-directory PATH  shared session metadata directory (default: iCloud Drive/VeilStore.sessions)
+  --plain-store-path PATH   existing plain VeilStore to migrate (default: iCloud Drive/VeilStore)
   --size SIZE               sparsebundle max size (default: 1g)
   --volume-name NAME        mounted volume name (default: VeilStore)
   --config-path PATH        Veil config path to write (default: ~/.veil/config.toml)
   --no-config               Do not write config; print the TOML block only
   --force-config            Overwrite an existing config file after creating a .bak backup
+  --skip-migration          Do not copy an existing plain VeilStore into the new encrypted volume
   -h, --help                Show this help
 
 The script creates a Password item with a generated password, reads it back
@@ -68,11 +70,13 @@ item_title="VeilStore"
 bundle_path="$icloud_root/VeilStore.sparsebundle"
 mount_path="$HOME/Library/Application Support/veil/mounts/default"
 session_directory="$icloud_root/VeilStore.sessions"
+plain_store_path="$icloud_root/VeilStore"
 size="1g"
 volume_name="VeilStore"
 config_path="$HOME/.veil/config.toml"
 write_config=1
 force_config=0
+migrate_plain_store=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -96,6 +100,10 @@ while [[ $# -gt 0 ]]; do
       session_directory="$(expand_tilde "${2:?--session-directory requires a value}")"
       shift 2
       ;;
+    --plain-store-path)
+      plain_store_path="$(expand_tilde "${2:?--plain-store-path requires a value}")"
+      shift 2
+      ;;
     --size)
       size="${2:?--size requires a value}"
       shift 2
@@ -116,6 +124,10 @@ while [[ $# -gt 0 ]]; do
       force_config=1
       shift
       ;;
+    --skip-migration)
+      migrate_plain_store=0
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -128,6 +140,9 @@ done
 
 require_command op
 require_command hdiutil
+if [[ "$migrate_plain_store" -eq 1 && -d "$plain_store_path" ]]; then
+  require_command ditto
+fi
 
 [[ -e "$bundle_path" ]] && fail "bundle already exists: $bundle_path"
 
@@ -183,6 +198,22 @@ printf '%s' "$passphrase" | hdiutil create \
   -fs APFS \
   -size "$size" \
   "$bundle_path" >/dev/null
+
+if [[ "$migrate_plain_store" -eq 1 && -d "$plain_store_path" ]]; then
+  printf 'migrating plain store into encrypted volume: %s\n' "$plain_store_path"
+  printf '%s' "$passphrase" | hdiutil attach \
+    "$bundle_path" \
+    -stdinpass \
+    -mountpoint "$mount_path" \
+    -nobrowse >/dev/null
+
+  ditto "$plain_store_path" "$mount_path"
+  printf '{\n  "version": 1,\n  "store_id": "default"\n}\n' > "$mount_path/.veil-store"
+
+  if ! hdiutil detach "$mount_path" >/dev/null; then
+    printf 'warning: failed to detach migrated VeilStore; detach it manually when idle: %s\n' "$mount_path" >&2
+  fi
+fi
 unset passphrase
 
 if [[ "$write_config" -eq 1 ]]; then

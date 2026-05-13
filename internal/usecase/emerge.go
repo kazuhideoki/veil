@@ -40,7 +40,7 @@ type emergeWorkspace struct {
 	workspace domain.Workspace
 }
 
-func (u EmergeTargets) Run() error {
+func (u EmergeTargets) Run() (runErr error) {
 	_, config, err := loadConfig(u.FileSystem)
 	if err != nil {
 		return err
@@ -54,17 +54,22 @@ func (u EmergeTargets) Run() error {
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 
-	now := currentTime(u.Now)
-	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout); err != nil {
-		return err
-	}
-
-	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
+	statePath, state, err := loadState(u.FileSystem)
 	if err != nil {
 		return err
 	}
 
-	statePath, state, err := loadState(u.FileSystem)
+	now := currentTime(u.Now)
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout); err != nil {
+		return err
+	}
+	defer func() {
+		if runErr != nil {
+			_ = unmountStoreIfIdle(u.StoreRuntime, config, state, currentTime(u.Now), u.Stdout)
+		}
+	}()
+
+	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
 	if err != nil {
 		return err
 	}
