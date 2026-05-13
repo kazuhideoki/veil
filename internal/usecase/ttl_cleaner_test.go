@@ -125,6 +125,57 @@ func TestRunTTLCleanerUnmountsEncryptedVolumeAfterExpiredLeaseCleanup(t *testing
 	}
 }
 
+func TestRunTTLCleanerPassesForceWhenCleaningExpiredLease(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mountRoot := filepath.Join(tempHome, "veil-mount")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), encryptedConfigForTest(mountRoot, resolvedWorkspaceRoot))
+
+	storeTargetPath := filepath.Join(mountRoot, "workspaces", "myapp", ".env")
+	if err := os.MkdirAll(filepath.Dir(storeTargetPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(storeTargetPath, []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	workspaceTargetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.Symlink(storeTargetPath, workspaceTargetPath); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	state := domain.DefaultState()
+	now := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	if err := state.UpsertLeaseForStore("myapp", ".env", now.Add(-2*time.Hour), now.Add(-time.Hour), domain.DefaultStoreID, workspaceTargetPath, storeTargetPath); err != nil {
+		t.Fatalf("UpsertLeaseForStore() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+
+	runtime := &recordingEncryptedStoreRuntime{}
+	uc := RunTTLCleaner{
+		FileSystem:   infra.OSFileSystem{},
+		StoreRuntime: runtime,
+		Stdout:       &bytes.Buffer{},
+		Now:          func() time.Time { return now },
+		Force:        true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if len(runtime.forceValues) != 1 || !runtime.forceValues[0] {
+		t.Fatalf("force values = %#v, want [true]", runtime.forceValues)
+	}
+}
+
 func TestRunTTLCleanerPrunesUnknownEncryptedLeaseWithoutMounting(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)

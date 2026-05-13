@@ -33,6 +33,7 @@ type EmergeTargets struct {
 	Stdout        io.Writer
 	Now           func() time.Time
 	AllWorkspaces bool
+	Force         bool
 }
 
 type emergeWorkspace struct {
@@ -60,7 +61,7 @@ func (u EmergeTargets) Run() (runErr error) {
 	}
 
 	now := currentTime(u.Now)
-	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout); err != nil {
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, u.Force); err != nil {
 		return err
 	}
 	defer func() {
