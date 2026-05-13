@@ -18,6 +18,7 @@ type RunTTLCleaner struct {
 	StoreRuntime EncryptedStoreRuntime
 	Stdout       io.Writer
 	Now          func() time.Time
+	Force        bool
 }
 
 func (u RunTTLCleaner) Run() error {
@@ -56,7 +57,7 @@ func (u RunTTLCleaner) cleanupExpiredLeases() error {
 		}
 	}
 	if needsStoreMount {
-		if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout); err != nil {
+		if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, u.Force); err != nil {
 			return err
 		}
 	}

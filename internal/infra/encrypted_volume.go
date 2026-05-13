@@ -29,19 +29,34 @@ type sessionFile struct {
 	State      string `json:"state"`
 }
 
+type activeSession struct {
+	Host     string
+	LastSeen time.Time
+}
+
 func (EncryptedVolumeRuntime) IsMounted(config domain.Config) bool {
 	return isMountedStore(config)
 }
 
-func (EncryptedVolumeRuntime) EnsureMounted(config domain.Config, now time.Time, warnings io.Writer) error {
+func (EncryptedVolumeRuntime) EnsureMounted(config domain.Config, now time.Time, warnings io.Writer, force bool) error {
 	if err := validateEncryptedConfig(config); err != nil {
 		return err
 	}
+	activeSessions, err := activeOtherSessions(config, now)
+	if err != nil {
+		fmt.Fprintf(warnings, "warning: failed to read session metadata: %v\n", err)
+		if !force {
+			return fmt.Errorf("failed to verify VeilStore session metadata; rerun with --force to continue without consistency guarantees: %w", err)
+		}
+	}
+	if len(activeSessions) > 0 {
+		writeActiveSessionWarning(warnings, activeSessions, force)
+		if !force {
+			return fmt.Errorf("VeilStore appears active on another device; rerun with --force to continue without consistency guarantees")
+		}
+	}
 	if isMountedStore(config) {
 		return touchOwnSession(config, now, warnings)
-	}
-	if err := warnActiveSessions(config, now, warnings); err != nil {
-		fmt.Fprintf(warnings, "warning: failed to read session metadata: %v\n", err)
 	}
 
 	passphrase, err := readOnePasswordSecret(config.KeyProvider.Ref)
@@ -166,40 +181,58 @@ func writeStoreMarker(config domain.Config) error {
 	return os.WriteFile(filepath.Join(config.Store.MountPath, ".veil-store"), data, 0o600)
 }
 
-func warnActiveSessions(config domain.Config, now time.Time, warnings io.Writer) error {
+func activeOtherSessions(config domain.Config, now time.Time) ([]activeSession, error) {
 	if config.Session.Directory == "" {
-		return nil
+		return nil, nil
 	}
 	entries, err := os.ReadDir(config.Session.Directory)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return err
+		return nil, err
 	}
 	staleAfter, err := time.ParseDuration(config.Session.StaleAfter)
 	if err != nil {
-		return fmt.Errorf("parse session stale_after: %w", err)
+		return nil, fmt.Errorf("parse session stale_after: %w", err)
 	}
 	ownID, _ := readOwnSessionID(config)
+	active := []activeSession{}
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
 		session, err := readSession(filepath.Join(config.Session.Directory, entry.Name()))
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("read session %s: %w", entry.Name(), err)
 		}
 		if session.SessionID == ownID || session.StoreID != domain.DefaultStoreID {
 			continue
 		}
 		lastSeen, err := time.Parse(time.RFC3339, session.LastSeenAt)
-		if err != nil || !lastSeen.Add(staleAfter).After(now) {
+		if err != nil {
+			return nil, fmt.Errorf("parse session %s last_seen_at: %w", entry.Name(), err)
+		}
+		if !lastSeen.Add(staleAfter).After(now) {
 			continue
 		}
-		fmt.Fprintf(warnings, "warning: VeilStore may be active on another device:\n  host: %s\n  last seen: %s\n\nAvoid editing the same secret from multiple devices at the same time.\n", session.Host, lastSeen.Format(time.RFC3339))
+		active = append(active, activeSession{Host: session.Host, LastSeen: lastSeen})
 	}
-	return nil
+	return active, nil
+}
+
+func writeActiveSessionWarning(warnings io.Writer, sessions []activeSession, forced bool) {
+	fmt.Fprintln(warnings, "warning: VeilStore appears active on another device:")
+	for _, session := range sessions {
+		fmt.Fprintf(warnings, "  host: %s\n  last seen: %s\n", session.Host, session.LastSeen.Format(time.RFC3339))
+	}
+	if forced {
+		fmt.Fprintln(warnings, "\ncontinuing because --force was specified")
+		fmt.Fprintln(warnings, "Veil does not guarantee file consistency after forced multi-device use.")
+		return
+	}
+	fmt.Fprintln(warnings, "\nRefusing to emerge because concurrent sparsebundle use may read stale data or create conflicts.")
+	fmt.Fprintln(warnings, "Run veil vanish on the other device, wait for iCloud sync, then retry. Use --force only if you accept the consistency risk.")
 }
 
 func readSession(path string) (sessionFile, error) {

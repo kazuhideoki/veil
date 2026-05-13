@@ -174,6 +174,58 @@ func TestEmergeTargetsEnsuresEncryptedVolumeBeforeSymlink(t *testing.T) {
 	}
 }
 
+func TestEmergeTargetsPassesForceToEncryptedVolume(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mountRoot := filepath.Join(tempHome, "veil-mount")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), encryptedConfigForTest(mountRoot, resolvedWorkspaceRoot))
+	storeEnvPath := filepath.Join(mountRoot, "workspaces", "myapp", ".env")
+	if err := os.MkdirAll(filepath.Dir(storeEnvPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(storeEnvPath, []byte("TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	runtime := &recordingEncryptedStoreRuntime{}
+	uc := EmergeTargets{
+		FileSystem:   infra.OSFileSystem{},
+		StoreRuntime: runtime,
+		Stdout:       &bytes.Buffer{},
+		Force:        true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if len(runtime.forceValues) != 1 || !runtime.forceValues[0] {
+		t.Fatalf("force values = %#v, want [true]", runtime.forceValues)
+	}
+}
+
 func TestEmergeTargetsReturnsErrorWhenStoreSourceIsMissing(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)

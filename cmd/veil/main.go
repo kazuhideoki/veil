@@ -191,7 +191,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		emergeFlags.SetOutput(stderr)
 
 		var allWorkspaces bool
+		var force bool
 		emergeFlags.BoolVar(&allWorkspaces, "all", false, "emerge registered targets for all workspaces")
+		emergeFlags.BoolVar(&force, "force", false, "emerge even when another device has an active encrypted store session")
 
 		if err := emergeFlags.Parse(args[1:]); err != nil {
 			return err
@@ -205,6 +207,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			FileSystem:   infra.OSFileSystem{},
 			StoreRuntime: infra.EncryptedVolumeRuntime{},
 			Stdout:       stdout,
+			Force:        force,
 		}
 		if err := cleaner.Run(); err != nil {
 			return err
@@ -215,6 +218,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			StoreRuntime:  infra.EncryptedVolumeRuntime{},
 			Stdout:        stdout,
 			AllWorkspaces: allWorkspaces,
+			Force:         force,
 		}
 
 		return runner.Run()

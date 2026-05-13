@@ -55,10 +55,12 @@ func mustUpsertLease(t *testing.T, state *domain.State, workspaceID, target stri
 type recordingEncryptedStoreRuntime struct {
 	ensureCalls  int
 	unmountCalls int
+	forceValues  []bool
 }
 
-func (r *recordingEncryptedStoreRuntime) EnsureMounted(config domain.Config, now time.Time, warnings io.Writer) error {
+func (r *recordingEncryptedStoreRuntime) EnsureMounted(config domain.Config, now time.Time, warnings io.Writer, force bool) error {
 	r.ensureCalls++
+	r.forceValues = append(r.forceValues, force)
 	return nil
 }
 
