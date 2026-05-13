@@ -46,6 +46,18 @@ quote_toml_string() {
   printf '"%s"' "$value"
 }
 
+extract_workspace_tables() {
+  local path="$1"
+  [[ -f "$path" ]] || return 0
+
+  # Preserve existing workspace registrations while replacing only store setup.
+  awk '
+    /^\[workspaces\./ { in_workspace = 1 }
+    /^\[/ && $0 !~ /^\[workspaces\./ { in_workspace = 0 }
+    in_workspace { print }
+  ' "$path"
+}
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
@@ -139,6 +151,16 @@ directory = $(quote_toml_string "$session_directory")
 stale_after = "24h"
 CONFIG
 )
+
+workspace_toml=""
+if [[ -f "$config_path" ]]; then
+  workspace_toml="$(extract_workspace_tables "$config_path")"
+fi
+if [[ -n "$workspace_toml" ]]; then
+  config_toml="${config_toml}
+
+${workspace_toml}"
+fi
 
 printf 'creating 1Password item: vault=%s title=%s\n' "$vault" "$item_title"
 op item create \
