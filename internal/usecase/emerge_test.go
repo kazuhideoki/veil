@@ -220,6 +220,57 @@ func TestEmergeTargetsReturnsErrorWhenStoreSourceIsMissing(t *testing.T) {
 	}
 }
 
+func TestEmergeTargetsUnmountsEncryptedVolumeWhenStoreSourceIsMissing(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mountRoot := filepath.Join(tempHome, "veil-mount")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), encryptedConfigForTest(mountRoot, resolvedWorkspaceRoot))
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	runtime := &recordingEncryptedStoreRuntime{}
+	uc := EmergeTargets{
+		FileSystem:   infra.OSFileSystem{},
+		StoreRuntime: runtime,
+		Stdout:       &bytes.Buffer{},
+		Now: func() time.Time {
+			return time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+		},
+	}
+
+	err = uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if runtime.ensureCalls != 1 {
+		t.Fatalf("ensure calls = %d, want 1", runtime.ensureCalls)
+	}
+	if runtime.unmountCalls != 1 {
+		t.Fatalf("unmount calls = %d, want 1", runtime.unmountCalls)
+	}
+}
+
 func TestEmergeTargetsRejectsExistingRegularFile(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
