@@ -45,7 +45,7 @@ func loadActiveWorkspaceContext(fs activeWorkspaceFileSystem) (activeWorkspaceCo
 		return activeWorkspaceContext{}, fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	config.StorePath = expandHomeDir(config.StorePath, homeDir)
+	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, fs)
 
 	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)

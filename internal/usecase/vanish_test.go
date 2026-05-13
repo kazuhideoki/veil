@@ -84,6 +84,74 @@ func TestVanishTargetsRemovesVeilManagedSymlinks(t *testing.T) {
 	}
 }
 
+func TestVanishTargetsUnmountsEncryptedVolumeWhenIdle(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mountRoot := filepath.Join(tempHome, "veil-mount")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), encryptedConfigForTest(mountRoot, resolvedWorkspaceRoot))
+
+	storeEnvPath := filepath.Join(mountRoot, "workspaces", "myapp", ".env")
+	if err := os.MkdirAll(filepath.Dir(storeEnvPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(storeEnvPath, []byte("TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	if err := os.Symlink(storeEnvPath, filepath.Join(workspaceRoot, ".env")); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseForStore("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), domain.DefaultStoreID, filepath.Join(workspaceRoot, ".env"), storeEnvPath); err != nil {
+		t.Fatalf("UpsertLeaseForStore() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	runtime := &recordingEncryptedStoreRuntime{}
+	uc := VanishTargets{
+		FileSystem:   infra.OSFileSystem{},
+		StoreRuntime: runtime,
+		Stdout:       &bytes.Buffer{},
+		Now: func() time.Time {
+			return now
+		},
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if runtime.ensureCalls != 1 {
+		t.Fatalf("ensure calls = %d, want 1", runtime.ensureCalls)
+	}
+	if runtime.unmountCalls != 1 {
+		t.Fatalf("unmount calls = %d, want 1", runtime.unmountCalls)
+	}
+}
+
 func TestVanishTargetsSkipsAbsentRegularAndForeignTargets(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)

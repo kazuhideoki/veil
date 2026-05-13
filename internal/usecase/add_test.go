@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kazuhideoki/veil/internal/infra"
 )
@@ -98,6 +99,63 @@ func TestAddTargetMovesFileIntoStoreAndUpdatesConfig(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
 		}
+	}
+}
+
+func TestAddTargetEnsuresEncryptedVolumeBeforeWritingStore(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mountRoot := filepath.Join(tempHome, "veil-mount")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), strings.ReplaceAll(encryptedConfigForTest(mountRoot, resolvedWorkspaceRoot), `targets = [".env"]`, `targets = []`))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, []byte("TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	runtime := &recordingEncryptedStoreRuntime{}
+	uc := AddTarget{
+		FileSystem:     infra.OSFileSystem{},
+		TrackedChecker: stubTrackedChecker{},
+		StoreRuntime:   runtime,
+		Stdout:         &bytes.Buffer{},
+		TargetPath:     ".env",
+		Now:            func() time.Time { return time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC) },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if runtime.ensureCalls != 1 {
+		t.Fatalf("ensure calls = %d, want 1", runtime.ensureCalls)
+	}
+	if runtime.unmountCalls != 1 {
+		t.Fatalf("unmount calls = %d, want 1", runtime.unmountCalls)
+	}
+	if _, err := os.Stat(filepath.Join(mountRoot, "workspaces", "myapp", ".env")); err != nil {
+		t.Fatalf("Stat(store target) returned error: %v", err)
 	}
 }
 

@@ -29,6 +29,7 @@ type emergeFileSystem interface {
 
 type EmergeTargets struct {
 	FileSystem    emergeFileSystem
+	StoreRuntime  EncryptedStoreRuntime
 	Stdout        io.Writer
 	Now           func() time.Time
 	AllWorkspaces bool
@@ -50,8 +51,13 @@ func (u EmergeTargets) Run() error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	config.StorePath = expandHomeDir(config.StorePath, homeDir)
+	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
+
+	now := currentTime(u.Now)
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout); err != nil {
+		return err
+	}
 
 	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
 	if err != nil {
@@ -63,7 +69,6 @@ func (u EmergeTargets) Run() error {
 		return err
 	}
 
-	now := currentTime(u.Now)
 	originalState := cloneState(state)
 	createdTargetPaths := []string{}
 	outputLayout := newEmergeOutputLayout(u.AllWorkspaces, workspaces)
@@ -160,7 +165,7 @@ func (u EmergeTargets) Run() error {
 				createdTargetPaths = append(createdTargetPaths, workspaceTargetPath)
 			}
 
-			if err := state.UpsertLease(entry.id, target, now, now.Add(ttl)); err != nil {
+			if err := state.UpsertLeaseForStore(entry.id, target, now, now.Add(ttl), domain.DefaultStoreID, workspaceTargetPath, storeTargetPath); err != nil {
 				if u.AllWorkspaces {
 					wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err)
 					if created {

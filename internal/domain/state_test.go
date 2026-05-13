@@ -100,6 +100,52 @@ func TestParseStateTOMLRoundTripsRenderedState(t *testing.T) {
 	}
 }
 
+func TestStateLeaseRendersEncryptedStorePaths(t *testing.T) {
+	state := DefaultState()
+	mountedAt := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	expiresAt := mountedAt.Add(24 * time.Hour)
+
+	if err := state.UpsertLeaseForStore("myapp", ".env", mountedAt, expiresAt, DefaultStoreID, "/tmp/myapp/.env", "/tmp/mount/workspaces/myapp/.env"); err != nil {
+		t.Fatalf("UpsertLeaseForStore() returned error: %v", err)
+	}
+
+	data, err := state.RenderTOML()
+	if err != nil {
+		t.Fatalf("RenderTOML() returned error: %v", err)
+	}
+
+	rendered := string(data)
+	for _, want := range []string{
+		`store_id = "default"`,
+		`workspace_path = "/tmp/myapp/.env"`,
+		`store_path = "/tmp/mount/workspaces/myapp/.env"`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want substring %q", rendered, want)
+		}
+	}
+}
+
+func TestStateHasActiveLeaseForStoreIgnoresExpiredLeases(t *testing.T) {
+	state := DefaultState()
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	if err := state.UpsertLeaseForStore("myapp", ".env", now.Add(-2*time.Hour), now.Add(-time.Hour), DefaultStoreID, "", ""); err != nil {
+		t.Fatalf("UpsertLeaseForStore() returned error: %v", err)
+	}
+
+	if state.HasActiveLeaseForStore(DefaultStoreID, now) {
+		t.Fatal("HasActiveLeaseForStore() returned true for an expired lease")
+	}
+
+	if err := state.UpsertLeaseForStore("myapp", "config.json", now, now.Add(time.Hour), DefaultStoreID, "", ""); err != nil {
+		t.Fatalf("UpsertLeaseForStore() returned error: %v", err)
+	}
+
+	if !state.HasActiveLeaseForStore(DefaultStoreID, now) {
+		t.Fatal("HasActiveLeaseForStore() returned false for an active lease")
+	}
+}
+
 func TestStateUpsertLeaseReplacesExistingLease(t *testing.T) {
 	state := DefaultState()
 	mountedAt := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)

@@ -200,6 +200,62 @@ func TestConfigStoreTargetPathBuildsWorkspaceScopedPath(t *testing.T) {
 	}
 }
 
+func TestConfigStoreTargetPathUsesEncryptedVolumeMountPath(t *testing.T) {
+	config := DefaultConfig()
+	config.Store = StoreConfig{
+		Backend:   EncryptedVolumeBackend,
+		MountPath: "/tmp/veil-mount",
+	}
+
+	got, err := config.StoreTargetPath("myapp", ".env")
+	if err != nil {
+		t.Fatalf("StoreTargetPath() returned error: %v", err)
+	}
+
+	want := filepath.Join("/tmp/veil-mount", "workspaces", "myapp", ".env")
+	if got != want {
+		t.Fatalf("store target path = %q, want %q", got, want)
+	}
+}
+
+func TestParseConfigTOMLReadsEncryptedVolumeSchema(t *testing.T) {
+	config, err := ParseConfigTOML([]byte(`
+version = 2
+default_ttl = "24h"
+
+[store]
+backend = "encrypted_volume"
+bundle_path = "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore.sparsebundle"
+mount_path = "~/Library/Application Support/veil/mounts/default"
+volume_name = "VeilStore"
+
+[key_provider]
+type = "1password"
+ref = "op://Private/Veil/store-passphrase"
+
+[session]
+directory = "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore.sessions"
+stale_after = "24h"
+
+[workspaces.myapp]
+root = "/tmp/myapp"
+targets = [".env"]
+`))
+	if err != nil {
+		t.Fatalf("ParseConfigTOML() returned error: %v", err)
+	}
+
+	if !config.IsEncryptedVolumeStore() {
+		t.Fatalf("config.Store.Backend = %q", config.Store.Backend)
+	}
+	if config.KeyProvider.Ref != "op://Private/Veil/store-passphrase" {
+		t.Fatalf("key provider ref = %q", config.KeyProvider.Ref)
+	}
+	if config.Session.StaleAfter != "24h" {
+		t.Fatalf("session stale_after = %q", config.Session.StaleAfter)
+	}
+}
+
 func TestConfigStoreTargetPathRejectsInvalidWorkspaceID(t *testing.T) {
 	config := DefaultConfig()
 	config.StorePath = "/tmp/veil-store"

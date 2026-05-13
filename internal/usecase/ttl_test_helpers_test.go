@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,40 @@ func mustUpsertLease(t *testing.T, state *domain.State, workspaceID, target stri
 	if err := state.UpsertLease(workspaceID, target, mountedAt, expiresAt); err != nil {
 		t.Fatalf("UpsertLease() returned error: %v", err)
 	}
+}
+
+type recordingEncryptedStoreRuntime struct {
+	ensureCalls  int
+	unmountCalls int
+}
+
+func (r *recordingEncryptedStoreRuntime) EnsureMounted(config domain.Config, now time.Time, warnings io.Writer) error {
+	r.ensureCalls++
+	return nil
+}
+
+func (r *recordingEncryptedStoreRuntime) UnmountIfIdle(config domain.Config, state domain.State, now time.Time, warnings io.Writer) error {
+	r.unmountCalls++
+	return nil
+}
+
+func encryptedConfigForTest(mountRoot, workspaceRoot string) string {
+	return "version = 2\n" +
+		"default_ttl = \"24h\"\n\n" +
+		"[store]\n" +
+		"backend = \"encrypted_volume\"\n" +
+		"bundle_path = \"/tmp/VeilStore.sparsebundle\"\n" +
+		"mount_path = " + workspaceRootQuoted(mountRoot) + "\n" +
+		"volume_name = \"VeilStore\"\n\n" +
+		"[key_provider]\n" +
+		"type = \"1password\"\n" +
+		"ref = \"op://Private/Veil/store-passphrase\"\n\n" +
+		"[session]\n" +
+		"directory = \"/tmp/VeilStore.sessions\"\n" +
+		"stale_after = \"24h\"\n\n" +
+		"[workspaces.myapp]\n" +
+		"root = " + workspaceRootQuoted(workspaceRoot) + "\n" +
+		"targets = [\".env\"]\n"
 }
 
 type failingStateWriteFS struct {

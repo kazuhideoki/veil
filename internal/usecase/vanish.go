@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type vanishFileSystem interface {
@@ -23,8 +24,10 @@ type vanishFileSystem interface {
 }
 
 type VanishTargets struct {
-	FileSystem vanishFileSystem
-	Stdout     io.Writer
+	FileSystem   vanishFileSystem
+	StoreRuntime EncryptedStoreRuntime
+	Stdout       io.Writer
+	Now          func() time.Time
 }
 
 func (u VanishTargets) Run() error {
@@ -48,8 +51,12 @@ func (u VanishTargets) Run() error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	config.StorePath = expandHomeDir(config.StorePath, homeDir)
+	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
+	now := currentTime(u.Now)
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout); err != nil {
+		return err
+	}
 
 	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
 	if err != nil {
@@ -81,6 +88,10 @@ func (u VanishTargets) Run() error {
 	}
 
 	if err := persistState(u.FileSystem, statePath, state); err != nil {
+		return err
+	}
+
+	if err := unmountStoreIfIdle(u.StoreRuntime, config, state, now, u.Stdout); err != nil {
 		return err
 	}
 

@@ -66,6 +66,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		runner := usecase.AddTarget{
 			FileSystem:     infra.OSFileSystem{},
 			TrackedChecker: infra.GitCLI{},
+			StoreRuntime:   infra.EncryptedVolumeRuntime{},
 			Stdout:         stdout,
 			TargetPath:     addFlags.Arg(0),
 		}
@@ -85,6 +86,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		runner := usecase.EditTarget{
 			FileSystem:   infra.OSFileSystem{},
+			StoreRuntime: infra.EncryptedVolumeRuntime{},
 			EditorRunner: infra.ExecEditorRunner{},
 			EditorPath:   os.Getenv("EDITOR"),
 			TargetPath:   editFlags.Arg(0),
@@ -196,8 +198,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		cleaner := usecase.RunTTLCleaner{
-			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
+			FileSystem:   infra.OSFileSystem{},
+			StoreRuntime: infra.EncryptedVolumeRuntime{},
+			Stdout:       stdout,
 		}
 		if err := cleaner.Run(); err != nil {
 			return err
@@ -205,6 +208,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		runner := usecase.EmergeTargets{
 			FileSystem:    infra.OSFileSystem{},
+			StoreRuntime:  infra.EncryptedVolumeRuntime{},
 			Stdout:        stdout,
 			AllWorkspaces: allWorkspaces,
 		}
@@ -223,8 +227,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.VanishTargets{
-			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
+			FileSystem:   infra.OSFileSystem{},
+			StoreRuntime: infra.EncryptedVolumeRuntime{},
+			Stdout:       stdout,
 		}
 
 		return runner.Run()
@@ -241,8 +246,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.StatusTargets{
-			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
+			FileSystem:         infra.OSFileSystem{},
+			StoreStatusChecker: infra.EncryptedVolumeRuntime{},
+			Stdout:             stdout,
 		}
 
 		return runner.Run()
@@ -259,8 +265,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.RunTTLCleaner{
-			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
+			FileSystem:   infra.OSFileSystem{},
+			StoreRuntime: infra.EncryptedVolumeRuntime{},
+			Stdout:       stdout,
 		}
 
 		return runner.Run()

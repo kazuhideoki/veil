@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kazuhideoki/veil/internal/infra"
 )
@@ -67,6 +68,68 @@ func TestEditTargetOpensRegisteredStoreFile(t *testing.T) {
 
 	if runner.targetPath != storeTargetPath {
 		t.Fatalf("targetPath = %q, want %q", runner.targetPath, storeTargetPath)
+	}
+}
+
+func TestEditTargetEnsuresEncryptedVolumeBeforeOpeningStoreFile(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mountRoot := filepath.Join(tempHome, "veil-mount")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), encryptedConfigForTest(mountRoot, resolvedWorkspaceRoot))
+
+	storeTargetPath := filepath.Join(mountRoot, "workspaces", "myapp", ".env")
+	if err := os.MkdirAll(filepath.Dir(storeTargetPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(storeTargetPath, []byte("TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	runtime := &recordingEncryptedStoreRuntime{}
+	runner := &stubEditorRunner{}
+	uc := EditTarget{
+		FileSystem:   infra.OSFileSystem{},
+		StoreRuntime: runtime,
+		EditorRunner: runner,
+		EditorPath:   "vim",
+		TargetPath:   ".env",
+		Now:          func() time.Time { return time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC) },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	if runtime.ensureCalls != 1 {
+		t.Fatalf("ensure calls = %d, want 1", runtime.ensureCalls)
+	}
+	if runtime.unmountCalls != 1 {
+		t.Fatalf("unmount calls = %d, want 1", runtime.unmountCalls)
+	}
+	if runner.targetPath != storeTargetPath {
+		t.Fatalf("target path = %q, want %q", runner.targetPath, storeTargetPath)
 	}
 }
 

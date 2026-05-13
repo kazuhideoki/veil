@@ -78,7 +78,7 @@ func (u InitConfig) Run() error {
 		}
 	}
 
-	config.StorePath = expandHomeDir(config.StorePath, homeDir)
+	config = expandConfigPaths(config, homeDir)
 	// TODO: Canonicalize existing workspace roots before duplicate checks so the same workspace cannot be registered twice via path aliases.
 	if err := config.AddWorkspace(workspaceID, currentDir); err != nil {
 		return err

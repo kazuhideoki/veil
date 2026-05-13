@@ -14,9 +14,10 @@ type ttlCleanerFileSystem interface {
 }
 
 type RunTTLCleaner struct {
-	FileSystem ttlCleanerFileSystem
-	Stdout     io.Writer
-	Now        func() time.Time
+	FileSystem   ttlCleanerFileSystem
+	StoreRuntime EncryptedStoreRuntime
+	Stdout       io.Writer
+	Now          func() time.Time
 }
 
 func (u RunTTLCleaner) Run() error {
@@ -34,7 +35,7 @@ func (u RunTTLCleaner) cleanupExpiredLeases() error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	config.StorePath = expandHomeDir(config.StorePath, homeDir)
+	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 
 	statePath, state, err := loadState(u.FileSystem)
@@ -43,6 +44,22 @@ func (u RunTTLCleaner) cleanupExpiredLeases() error {
 	}
 
 	now := currentTime(u.Now)
+	needsStoreMount := false
+	for _, lease := range state.Leases {
+		if lease.ExpiresAt.After(now) {
+			continue
+		}
+		workspace, ok := config.Workspaces[lease.WorkspaceID]
+		if ok && hasTarget(workspace.Targets, lease.Target) {
+			needsStoreMount = true
+			break
+		}
+	}
+	if needsStoreMount {
+		if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout); err != nil {
+			return err
+		}
+	}
 
 	for _, lease := range append([]domainLease(nil), convertLeases(state.Leases)...) {
 		if lease.expiresAt.After(now) {
@@ -79,6 +96,12 @@ func (u RunTTLCleaner) cleanupExpiredLeases() error {
 
 	if err := persistState(u.FileSystem, statePath, state); err != nil {
 		return err
+	}
+
+	if needsStoreMount {
+		if err := unmountStoreIfIdle(u.StoreRuntime, config, state, now, u.Stdout); err != nil {
+			return err
+		}
 	}
 
 	return nil

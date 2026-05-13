@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/kazuhideoki/veil/internal/domain"
 )
@@ -29,8 +30,10 @@ type addFileSystem interface {
 type AddTarget struct {
 	FileSystem     addFileSystem
 	TrackedChecker trackedChecker
+	StoreRuntime   EncryptedStoreRuntime
 	Stdout         io.Writer
 	TargetPath     string
+	Now            func() time.Time
 }
 
 type addCandidate struct {
@@ -62,8 +65,19 @@ func (u AddTarget) Run() error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	config.StorePath = expandHomeDir(config.StorePath, homeDir)
+	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
+	now := currentTime(u.Now)
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout); err != nil {
+		return err
+	}
+	defer func() {
+		_, state, err := loadState(u.FileSystem)
+		if err != nil {
+			return
+		}
+		_ = unmountStoreIfIdle(u.StoreRuntime, config, state, now, u.Stdout)
+	}()
 
 	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
 	if err != nil {

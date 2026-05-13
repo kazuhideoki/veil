@@ -2,9 +2,11 @@ package usecase
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -22,9 +24,11 @@ type editorRunner interface {
 
 type EditTarget struct {
 	FileSystem   editFileSystem
+	StoreRuntime EncryptedStoreRuntime
 	EditorRunner editorRunner
 	EditorPath   string
 	TargetPath   string
+	Now          func() time.Time
 }
 
 func (u EditTarget) Run() error {
@@ -53,8 +57,19 @@ func (u EditTarget) Run() error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
-	config.StorePath = expandHomeDir(config.StorePath, homeDir)
+	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
+	now := currentTime(u.Now)
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, io.Discard); err != nil {
+		return err
+	}
+	defer func() {
+		_, state, err := loadState(u.FileSystem)
+		if err != nil {
+			return
+		}
+		_ = unmountStoreIfIdle(u.StoreRuntime, config, state, now, io.Discard)
+	}()
 
 	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
 	if err != nil {
