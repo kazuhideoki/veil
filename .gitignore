@@ -2,3 +2,4 @@
 AGENTS.override.md
 plan*
 .gocache
+.DS_Store

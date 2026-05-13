@@ -1,7 +1,6 @@
 package usecase
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,33 +9,6 @@ import (
 
 	"github.com/kazuhideoki/veil/internal/domain"
 )
-
-type stubTTLCleanerStarter struct {
-	startCalls int
-	err        error
-}
-
-func (s *stubTTLCleanerStarter) Start() error {
-	s.startCalls++
-	return s.err
-}
-
-type stubTTLCleanerLock struct {
-	acquired bool
-	lockErr  error
-}
-
-func (l stubTTLCleanerLock) Lock() (bool, error) {
-	if l.lockErr != nil {
-		return false, l.lockErr
-	}
-
-	return l.acquired, nil
-}
-
-func (l stubTTLCleanerLock) Unlock() error {
-	return nil
-}
 
 func writeStateForTest(t *testing.T, path string, state domain.State) {
 	t.Helper()
@@ -140,13 +112,3 @@ func (fs failingStateWriteFS) Symlink(oldname, newname string) error {
 func (fs failingStateWriteFS) Remove(name string) error {
 	return os.Remove(name)
 }
-
-type failingCleanerStarter struct {
-	err error
-}
-
-func (s failingCleanerStarter) Start() error {
-	return s.err
-}
-
-var errCleanerStartFailed = errors.New("cleaner start failed")

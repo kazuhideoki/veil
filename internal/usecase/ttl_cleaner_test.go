@@ -49,12 +49,8 @@ func TestRunTTLCleanerRemovesExpiredManagedSymlinkAndLease(t *testing.T) {
 	var stdout bytes.Buffer
 	uc := RunTTLCleaner{
 		FileSystem: infra.OSFileSystem{},
-		Lock:       stubTTLCleanerLock{acquired: true},
 		Stdout:     &stdout,
 		Now:        func() time.Time { return now },
-		Sleep: func(duration time.Duration) {
-			t.Fatalf("Sleep() should not be called for expired lease: %v", duration)
-		},
 	}
 
 	if err := uc.Run(); err != nil {
@@ -72,17 +68,5 @@ func TestRunTTLCleanerRemovesExpiredManagedSymlinkAndLease(t *testing.T) {
 
 	if !strings.Contains(stdout.String(), "expired vanished target: myapp/.env") {
 		t.Fatalf("stdout = %q", stdout.String())
-	}
-}
-
-func TestRunTTLCleanerExitsWhenAnotherCleanerOwnsTheLock(t *testing.T) {
-	uc := RunTTLCleaner{
-		FileSystem: infra.OSFileSystem{},
-		Lock:       stubTTLCleanerLock{acquired: false},
-		Stdout:     &bytes.Buffer{},
-	}
-
-	if err := uc.Run(); err != nil {
-		t.Fatalf("Run() returned error: %v", err)
 	}
 }

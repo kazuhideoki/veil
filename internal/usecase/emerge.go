@@ -27,16 +27,11 @@ type emergeFileSystem interface {
 	Remove(name string) error
 }
 
-type ttlCleanerStarter interface {
-	Start() error
-}
-
 type EmergeTargets struct {
-	FileSystem     emergeFileSystem
-	Stdout         io.Writer
-	Now            func() time.Time
-	CleanerStarter ttlCleanerStarter
-	AllWorkspaces  bool
+	FileSystem    emergeFileSystem
+	Stdout        io.Writer
+	Now           func() time.Time
+	AllWorkspaces bool
 }
 
 type emergeWorkspace struct {
@@ -63,66 +58,125 @@ func (u EmergeTargets) Run() error {
 		return err
 	}
 
-	statePath, state, lock, err := loadStateLocked(u.FileSystem)
+	statePath, state, err := loadState(u.FileSystem)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = lock.Unlock()
-	}()
 
 	now := currentTime(u.Now)
 	originalState := cloneState(state)
 	createdTargetPaths := []string{}
 	outputLayout := newEmergeOutputLayout(u.AllWorkspaces, workspaces)
+	var emergeErr error
 
 	for _, entry := range workspaces {
 		ttl, err := config.EffectiveTTL(entry.workspace)
 		if err != nil {
+			if u.AllWorkspaces {
+				wrappedErr := wrapEmergeWorkspaceError(u.AllWorkspaces, entry.id, err)
+				outputLayout.writeWorkspaceFailure(u.Stdout, entry.id, wrappedErr)
+				emergeErr = errors.Join(emergeErr, wrappedErr)
+				continue
+			}
 			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeWorkspaceError(u.AllWorkspaces, entry.id, err))
 		}
 		if err := ensureWorkspaceRootExists(u.FileSystem, entry.workspace.Root); err != nil {
+			if u.AllWorkspaces {
+				wrappedErr := wrapEmergeWorkspaceError(u.AllWorkspaces, entry.id, err)
+				outputLayout.writeWorkspaceFailure(u.Stdout, entry.id, wrappedErr)
+				emergeErr = errors.Join(emergeErr, wrappedErr)
+				continue
+			}
 			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeWorkspaceError(u.AllWorkspaces, entry.id, err))
 		}
 
 		for _, target := range entry.workspace.Targets {
 			storeTargetPath, err := config.StoreTargetPath(entry.id, target)
 			if err != nil {
+				if u.AllWorkspaces {
+					wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err)
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					emergeErr = errors.Join(emergeErr, wrappedErr)
+					continue
+				}
 				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err))
 			}
 
 			storeInfo, err := u.FileSystem.Stat(storeTargetPath)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
-					return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("store target does not exist: %s", target)))
+					wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("store target does not exist: %s", target))
+					if u.AllWorkspaces {
+						outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+						emergeErr = errors.Join(emergeErr, wrappedErr)
+						continue
+					}
+					return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrappedErr)
 				}
-				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("stat store target: %w", err)))
+				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("stat store target: %w", err))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					emergeErr = errors.Join(emergeErr, wrappedErr)
+					continue
+				}
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrappedErr)
 			}
 
 			if !storeInfo.Mode().IsRegular() {
-				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("store target must be a regular file: %s", target)))
+				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("store target must be a regular file: %s", target))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					emergeErr = errors.Join(emergeErr, wrappedErr)
+					continue
+				}
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrappedErr)
 			}
 
 			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
 			// TODO: Reject targets whose resolved parent path escapes workspace.Root via symlinked directories.
 			if err := u.FileSystem.MkdirAll(filepath.Dir(workspaceTargetPath), 0o755); err != nil {
-				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("create workspace target directory: %w", err)))
+				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("create workspace target directory: %w", err))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					emergeErr = errors.Join(emergeErr, wrappedErr)
+					continue
+				}
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrappedErr)
 			}
 
 			created, err := ensureEmergedTarget(u.FileSystem, workspaceTargetPath, storeTargetPath)
 			if err != nil {
-				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("%s: %w", target, err)))
+				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("%s: %w", target, err))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					emergeErr = errors.Join(emergeErr, wrappedErr)
+					continue
+				}
+				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrappedErr)
 			}
 
 			targetLabel := emergeTargetLabel(u.AllWorkspaces, entry.id, target)
 			if created {
 				createdTargetPaths = append(createdTargetPaths, workspaceTargetPath)
 			}
-			outputLayout.writeTarget(u.Stdout, entry.id, targetLabel, target, created)
 
 			if err := state.UpsertLease(entry.id, target, now, now.Add(ttl)); err != nil {
+				if u.AllWorkspaces {
+					wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err)
+					if created {
+						if removeErr := u.FileSystem.Remove(workspaceTargetPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+							wrappedErr = errors.Join(wrappedErr, fmt.Errorf("rollback emerged target %s: %w", workspaceTargetPath, removeErr))
+						} else {
+							createdTargetPaths = createdTargetPaths[:len(createdTargetPaths)-1]
+						}
+					}
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					emergeErr = errors.Join(emergeErr, wrappedErr)
+					continue
+				}
 				return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err))
 			}
+			outputLayout.writeTarget(u.Stdout, entry.id, targetLabel, target, created)
 		}
 	}
 
@@ -130,10 +184,8 @@ func (u EmergeTargets) Run() error {
 		return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, err)
 	}
 
-	if u.CleanerStarter != nil {
-		if err := u.CleanerStarter.Start(); err != nil {
-			return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, fmt.Errorf("start ttl cleaner: %w", err))
-		}
+	if emergeErr != nil {
+		return emergeErr
 	}
 
 	return nil
@@ -175,6 +227,24 @@ func (l emergeOutputLayout) writeTarget(w io.Writer, workspaceID, targetLabel, t
 	}
 
 	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s\n", l.actionWidth, action, l.workspaceWidth, workspaceID, target)
+}
+
+func (l emergeOutputLayout) writeTargetFailure(w io.Writer, workspaceID, target string, err error) {
+	if !l.allWorkspaces {
+		fmt.Fprintf(w, "failed target: %s  error: %v\n", target, err)
+		return
+	}
+
+	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s  error: %v\n", l.actionWidth, "failed", l.workspaceWidth, workspaceID, target, err)
+}
+
+func (l emergeOutputLayout) writeWorkspaceFailure(w io.Writer, workspaceID string, err error) {
+	if !l.allWorkspaces {
+		fmt.Fprintf(w, "failed workspace: %s  error: %v\n", workspaceID, err)
+		return
+	}
+
+	fmt.Fprintf(w, "%-*s  repo: %-*s  error: %v\n", l.actionWidth, "failed", l.workspaceWidth, workspaceID, err)
 }
 
 func resolveEmergeWorkspaces(fs emergeFileSystem, config domain.Config, allWorkspaces bool) ([]emergeWorkspace, error) {
