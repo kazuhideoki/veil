@@ -346,3 +346,335 @@ func TestVanishTargetsClearsWorkspaceLeases(t *testing.T) {
 		t.Fatalf("lease count = %d, want 0", got)
 	}
 }
+
+func TestVanishTargetsAllWorkspacesRemovesSymlinksForEveryWorkspace(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	storeRoot := filepath.Join(tempHome, "veil-store")
+	alphaWorkspaceRoot := filepath.Join(tempHome, "alpha-workspace")
+	betaWorkspaceRoot := filepath.Join(tempHome, "beta-workspace")
+	for _, root := range []string{alphaWorkspaceRoot, betaWorkspaceRoot} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+	}
+
+	resolvedAlphaWorkspaceRoot, err := filepath.EvalSymlinks(alphaWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	resolvedBetaWorkspaceRoot, err := filepath.EvalSymlinks(betaWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(
+		t,
+		filepath.Join(tempHome, ".veil", "config.toml"),
+		"version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n"+
+			"[workspaces.alpha]\nroot = "+workspaceRootQuoted(resolvedAlphaWorkspaceRoot)+"\ntargets = [\".env\"]\n\n"+
+			"[workspaces.beta]\nroot = "+workspaceRootQuoted(resolvedBetaWorkspaceRoot)+"\ntargets = [\"config/app.json\"]\n",
+	)
+
+	alphaStorePath := filepath.Join(storeRoot, "workspaces", "alpha", ".env")
+	betaStorePath := filepath.Join(storeRoot, "workspaces", "beta", "config", "app.json")
+	for _, path := range []string{alphaStorePath, betaStorePath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("secret\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile() returned error: %v", err)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Join(betaWorkspaceRoot, "config"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.Symlink(alphaStorePath, filepath.Join(alphaWorkspaceRoot, ".env")); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+	if err := os.Symlink(betaStorePath, filepath.Join(betaWorkspaceRoot, "config", "app.json")); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	state := domain.DefaultState()
+	mustUpsertLease(t, &state, "alpha", ".env", now.Add(-time.Hour), now.Add(time.Hour))
+	mustUpsertLease(t, &state, "beta", "config/app.json", now.Add(-time.Hour), now.Add(time.Hour))
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(tempHome); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	uc := VanishTargets{
+		FileSystem:    infra.OSFileSystem{},
+		Stdout:        &stdout,
+		AllWorkspaces: true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	for _, targetPath := range []string{
+		filepath.Join(alphaWorkspaceRoot, ".env"),
+		filepath.Join(betaWorkspaceRoot, "config", "app.json"),
+	} {
+		if _, err := os.Lstat(targetPath); !os.IsNotExist(err) {
+			t.Fatalf("workspace target still exists after vanish --all: %s, err=%v", targetPath, err)
+		}
+	}
+
+	for _, want := range []string{
+		"vanished          repo: alpha  file: .env",
+		"vanished          repo: beta   file: config/app.json",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
+	}
+
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	if got := len(refreshed.Leases); got != 0 {
+		t.Fatalf("lease count = %d, want 0", got)
+	}
+}
+
+func TestVanishOutputLayoutAlignsAllWorkspaceColumns(t *testing.T) {
+	workspaces := []emergeWorkspace{
+		{id: "short"},
+		{id: "longer-repo"},
+	}
+	layout := newVanishOutputLayout(true, workspaces)
+
+	var stdout bytes.Buffer
+	layout.writeTarget(&stdout, "short", ".env", "vanished")
+	layout.writeTarget(&stdout, "longer-repo", "config/app.json", "already vanished")
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("lines = %q, want 2 lines", lines)
+	}
+
+	want := []string{
+		"vanished          repo: short        file: .env",
+		"already vanished  repo: longer-repo  file: config/app.json",
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, lines[i], want[i])
+		}
+	}
+
+	if strings.Index(lines[0], "repo:") != strings.Index(lines[1], "repo:") {
+		t.Fatalf("repo columns are not aligned: %q", lines)
+	}
+	if strings.Index(lines[0], "file:") != strings.Index(lines[1], "file:") {
+		t.Fatalf("file columns are not aligned: %q", lines)
+	}
+}
+
+func TestVanishTargetsAllWorkspacesLogsMissingWorkspaceRootAndClearsLease(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	storeRoot := filepath.Join(tempHome, "veil-store")
+	missingWorkspaceRoot := filepath.Join(tempHome, "missing-workspace")
+	betaWorkspaceRoot := filepath.Join(tempHome, "beta-workspace")
+	if err := os.MkdirAll(betaWorkspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+
+	resolvedBetaWorkspaceRoot, err := filepath.EvalSymlinks(betaWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(
+		t,
+		filepath.Join(tempHome, ".veil", "config.toml"),
+		"version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n"+
+			"[workspaces.alpha]\nroot = "+workspaceRootQuoted(missingWorkspaceRoot)+"\ntargets = [\".env\"]\n\n"+
+			"[workspaces.beta]\nroot = "+workspaceRootQuoted(resolvedBetaWorkspaceRoot)+"\ntargets = [\"config/app.json\"]\n",
+	)
+
+	betaStorePath := filepath.Join(storeRoot, "workspaces", "beta", "config", "app.json")
+	if err := os.MkdirAll(filepath.Dir(betaStorePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(betaStorePath, []byte("{\"project\":\"beta\"}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(betaWorkspaceRoot, "config"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.Symlink(betaStorePath, filepath.Join(betaWorkspaceRoot, "config", "app.json")); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	state := domain.DefaultState()
+	mustUpsertLease(t, &state, "alpha", ".env", now.Add(-time.Hour), now.Add(time.Hour))
+	mustUpsertLease(t, &state, "beta", "config/app.json", now.Add(-time.Hour), now.Add(time.Hour))
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(tempHome); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	uc := VanishTargets{
+		FileSystem:    infra.OSFileSystem{},
+		Stdout:        &stdout,
+		AllWorkspaces: true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	output := stdout.String()
+	for _, want := range []string{
+		"missing root      repo: alpha",
+		"file: .env",
+		"workspace: " + missingWorkspaceRoot,
+		"target not inspected; lease cleared",
+		"vanished          repo: beta",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, want substring %q", output, want)
+		}
+	}
+
+	if _, err := os.Lstat(filepath.Join(betaWorkspaceRoot, "config", "app.json")); !os.IsNotExist(err) {
+		t.Fatalf("beta workspace target still exists after vanish --all: err=%v", err)
+	}
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	if got := len(refreshed.Leases); got != 0 {
+		t.Fatalf("lease count = %d, want 0", got)
+	}
+}
+
+func TestVanishTargetsAllWorkspacesContinuesAfterTargetFailure(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	storeRoot := filepath.Join(tempHome, "veil-store")
+	alphaWorkspaceRoot := filepath.Join(tempHome, "alpha-workspace")
+	betaWorkspaceRoot := filepath.Join(tempHome, "beta-workspace")
+	if err := os.MkdirAll(alphaWorkspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(betaWorkspaceRoot, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	resolvedAlphaWorkspaceRoot, err := filepath.EvalSymlinks(alphaWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	resolvedBetaWorkspaceRoot, err := filepath.EvalSymlinks(betaWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(
+		t,
+		filepath.Join(tempHome, ".veil", "config.toml"),
+		"version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n"+
+			"[workspaces.alpha]\nroot = "+workspaceRootQuoted(resolvedAlphaWorkspaceRoot)+"\ntargets = [\".env\"]\n\n"+
+			"[workspaces.beta]\nroot = "+workspaceRootQuoted(resolvedBetaWorkspaceRoot)+"\ntargets = [\".env\"]\n",
+	)
+
+	alphaStorePath := filepath.Join(storeRoot, "workspaces", "alpha", ".env")
+	if err := os.MkdirAll(filepath.Dir(alphaStorePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(alphaStorePath, []byte("TOKEN=alpha\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	if err := os.Symlink(alphaStorePath, filepath.Join(alphaWorkspaceRoot, ".env")); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
+	state := domain.DefaultState()
+	mustUpsertLease(t, &state, "alpha", ".env", now.Add(-time.Hour), now.Add(time.Hour))
+	mustUpsertLease(t, &state, "beta", ".env", now.Add(-time.Hour), now.Add(time.Hour))
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(tempHome); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	uc := VanishTargets{
+		FileSystem:    infra.OSFileSystem{},
+		Stdout:        &stdout,
+		AllWorkspaces: true,
+	}
+
+	err = uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "beta:.env") {
+		t.Fatalf("error = %q, want beta target label", err)
+	}
+	if !strings.Contains(err.Error(), "stat workspace target") {
+		t.Fatalf("error = %q, want stat workspace target", err)
+	}
+	if _, err := os.Lstat(filepath.Join(alphaWorkspaceRoot, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("alpha workspace target still exists after vanish --all: err=%v", err)
+	}
+
+	for _, want := range []string{
+		"vanished",
+		"repo: alpha",
+		"failed",
+		"repo: beta",
+		"stat workspace target",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
+	}
+
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	if _, ok, err := refreshed.FindLease("alpha", ".env"); err != nil || ok {
+		t.Fatalf("FindLease(alpha, .env) = _, %v, %v; want no lease", ok, err)
+	}
+	if _, ok, err := refreshed.FindLease("beta", ".env"); err != nil || !ok {
+		t.Fatalf("FindLease(beta, .env) = _, %v, %v; want lease", ok, err)
+	}
+}

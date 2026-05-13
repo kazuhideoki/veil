@@ -27,6 +27,11 @@ type emergeFileSystem interface {
 	Remove(name string) error
 }
 
+type workspaceResolverFileSystem interface {
+	Getwd() (string, error)
+	EvalSymlinks(path string) (string, error)
+}
+
 type EmergeTargets struct {
 	FileSystem    emergeFileSystem
 	StoreRuntime  EncryptedStoreRuntime
@@ -257,7 +262,7 @@ func (l emergeOutputLayout) writeWorkspaceFailure(w io.Writer, workspaceID strin
 	fmt.Fprintf(w, "%-*s  repo: %-*s  error: %v\n", l.actionWidth, "failed", l.workspaceWidth, workspaceID, err)
 }
 
-func resolveEmergeWorkspaces(fs emergeFileSystem, config domain.Config, allWorkspaces bool) ([]emergeWorkspace, error) {
+func resolveEmergeWorkspaces(fs workspaceResolverFileSystem, config domain.Config, allWorkspaces bool) ([]emergeWorkspace, error) {
 	if allWorkspaces {
 		ids := make([]string, 0, len(config.Workspaces))
 		for id := range config.Workspaces {

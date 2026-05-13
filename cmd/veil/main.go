@@ -222,6 +222,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		vanishFlags := flag.NewFlagSet("vanish", flag.ContinueOnError)
 		vanishFlags.SetOutput(stderr)
 
+		var allWorkspaces bool
+		vanishFlags.BoolVar(&allWorkspaces, "all", false, "vanish registered targets for all workspaces")
+
 		if err := vanishFlags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -231,9 +234,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.VanishTargets{
-			FileSystem:   infra.OSFileSystem{},
-			StoreRuntime: infra.EncryptedVolumeRuntime{},
-			Stdout:       stdout,
+			FileSystem:    infra.OSFileSystem{},
+			StoreRuntime:  infra.EncryptedVolumeRuntime{},
+			Stdout:        stdout,
+			AllWorkspaces: allWorkspaces,
 		}
 
 		return runner.Run()

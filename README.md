@@ -46,6 +46,9 @@ veil edit .env
 
 # remove the mounted links from the workspace
 veil vanish
+
+# remove mounted links from every registered workspace
+veil vanish --all
 ```
 
 ## Configuration

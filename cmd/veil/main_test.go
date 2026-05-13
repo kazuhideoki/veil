@@ -245,6 +245,102 @@ func TestRunEmergeAllCreatesSymlinksForEveryWorkspace(t *testing.T) {
 	}
 }
 
+func TestRunVanishAllRemovesSymlinksForEveryWorkspace(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	storeRoot := filepath.Join(tempHome, "veil-store")
+	alphaWorkspaceRoot := filepath.Join(tempHome, "alpha-workspace")
+	betaWorkspaceRoot := filepath.Join(tempHome, "beta-workspace")
+	for _, root := range []string{alphaWorkspaceRoot, betaWorkspaceRoot} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+	}
+
+	resolvedAlphaWorkspaceRoot, err := filepath.EvalSymlinks(alphaWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	resolvedBetaWorkspaceRoot, err := filepath.EvalSymlinks(betaWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	configPath := filepath.Join(tempHome, ".veil", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+
+	configBody := fmt.Sprintf(
+		"version = 1\nstore_path = %q\ndefault_ttl = \"24h\"\n\n[workspaces.alpha]\nroot = %q\ntargets = [\".env\"]\n\n[workspaces.beta]\nroot = %q\ntargets = [\"config/app.json\"]\n",
+		storeRoot,
+		resolvedAlphaWorkspaceRoot,
+		resolvedBetaWorkspaceRoot,
+	)
+	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	alphaStorePath := filepath.Join(storeRoot, "workspaces", "alpha", ".env")
+	betaStorePath := filepath.Join(storeRoot, "workspaces", "beta", "config", "app.json")
+	for _, path := range []string{alphaStorePath, betaStorePath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("secret\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile() returned error: %v", err)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Join(betaWorkspaceRoot, "config"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.Symlink(alphaStorePath, filepath.Join(alphaWorkspaceRoot, ".env")); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+	if err := os.Symlink(betaStorePath, filepath.Join(betaWorkspaceRoot, "config", "app.json")); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+
+	if err := os.Chdir(tempHome); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	if err := run([]string{"vanish", "--all"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("run(vanish --all) returned error: %v", err)
+	}
+
+	for _, targetPath := range []string{
+		filepath.Join(alphaWorkspaceRoot, ".env"),
+		filepath.Join(betaWorkspaceRoot, "config", "app.json"),
+	} {
+		if _, err := os.Lstat(targetPath); !os.IsNotExist(err) {
+			t.Fatalf("workspace target still exists after vanish --all: %s, err=%v", targetPath, err)
+		}
+	}
+
+	for _, want := range []string{
+		"vanished          repo: alpha  file: .env",
+		"vanished          repo: beta   file: config/app.json",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
+	}
+}
+
 func TestRunWorkspaceRequiresSubcommand(t *testing.T) {
 	err := run([]string{"workspace"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil {

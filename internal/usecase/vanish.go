@@ -24,26 +24,17 @@ type vanishFileSystem interface {
 }
 
 type VanishTargets struct {
-	FileSystem   vanishFileSystem
-	StoreRuntime EncryptedStoreRuntime
-	Stdout       io.Writer
-	Now          func() time.Time
+	FileSystem    vanishFileSystem
+	StoreRuntime  EncryptedStoreRuntime
+	Stdout        io.Writer
+	Now           func() time.Time
+	AllWorkspaces bool
 }
 
 func (u VanishTargets) Run() error {
 	_, config, err := loadConfig(u.FileSystem)
 	if err != nil {
 		return err
-	}
-
-	currentDir, err := u.FileSystem.Getwd()
-	if err != nil {
-		return fmt.Errorf("resolve current directory: %w", err)
-	}
-
-	currentDir, err = u.FileSystem.EvalSymlinks(currentDir)
-	if err != nil {
-		return fmt.Errorf("canonicalize current directory: %w", err)
 	}
 
 	homeDir, err := u.FileSystem.UserHomeDir()
@@ -58,33 +49,75 @@ func (u VanishTargets) Run() error {
 		return err
 	}
 
-	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
-	if err != nil {
-		return err
-	}
-
 	statePath, state, err := loadState(u.FileSystem)
 	if err != nil {
 		return err
 	}
 
-	for _, target := range workspace.Targets {
-		workspaceTargetPath := filepath.Join(workspace.Root, target)
-		storeTargetPath, err := config.StoreTargetPath(workspaceID, target)
-		if err != nil {
-			return err
+	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
+	if err != nil {
+		return err
+	}
+
+	outputLayout := newVanishOutputLayout(u.AllWorkspaces, workspaces)
+	var vanishErr error
+
+	for _, entry := range workspaces {
+		workspaceRootMissing := false
+		if u.AllWorkspaces {
+			if _, err := u.FileSystem.Stat(entry.workspace.Root); err != nil && errors.Is(err, os.ErrNotExist) {
+				workspaceRootMissing = true
+			}
 		}
 
-		status, err := vanishTarget(u.FileSystem, workspaceTargetPath, storeTargetPath)
-		if err != nil {
-			return fmt.Errorf("%s: %w", target, err)
-		}
+		for _, target := range entry.workspace.Targets {
+			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
+			if workspaceRootMissing {
+				if err := state.RemoveLease(entry.id, target); err != nil {
+					wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
 
-		if err := state.RemoveLease(workspaceID, target); err != nil {
-			return err
-		}
+				outputLayout.writeMissingWorkspaceTarget(u.Stdout, entry.id, target, entry.workspace.Root)
+				continue
+			}
 
-		fmt.Fprintf(u.Stdout, "%s target: %s\n", status, target)
+			storeTargetPath, err := config.StoreTargetPath(entry.id, target)
+			if err != nil {
+				if u.AllWorkspaces {
+					wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
+			}
+
+			status, err := vanishTarget(u.FileSystem, workspaceTargetPath, storeTargetPath)
+			if err != nil {
+				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrappedErr
+			}
+
+			if err := state.RemoveLease(entry.id, target); err != nil {
+				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrappedErr
+			}
+
+			outputLayout.writeTarget(u.Stdout, entry.id, target, status)
+		}
 	}
 
 	if err := persistState(u.FileSystem, statePath, state); err != nil {
@@ -95,7 +128,70 @@ func (u VanishTargets) Run() error {
 		return err
 	}
 
+	if vanishErr != nil {
+		return vanishErr
+	}
+
 	return nil
+}
+
+type vanishOutputLayout struct {
+	allWorkspaces  bool
+	actionWidth    int
+	workspaceWidth int
+}
+
+func newVanishOutputLayout(allWorkspaces bool, workspaces []emergeWorkspace) vanishOutputLayout {
+	layout := vanishOutputLayout{
+		allWorkspaces: allWorkspaces,
+		actionWidth:   len("already vanished"),
+	}
+	if !allWorkspaces {
+		return layout
+	}
+
+	for _, entry := range workspaces {
+		if len(entry.id) > layout.workspaceWidth {
+			layout.workspaceWidth = len(entry.id)
+		}
+	}
+
+	return layout
+}
+
+func (l vanishOutputLayout) writeTarget(w io.Writer, workspaceID, target, status string) {
+	if !l.allWorkspaces {
+		fmt.Fprintf(w, "%s target: %s\n", status, target)
+		return
+	}
+
+	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s\n", l.actionWidth, status, l.workspaceWidth, workspaceID, target)
+}
+
+func (l vanishOutputLayout) writeTargetFailure(w io.Writer, workspaceID, target string, err error) {
+	if !l.allWorkspaces {
+		fmt.Fprintf(w, "failed target: %s  error: %v\n", target, err)
+		return
+	}
+
+	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s  error: %v\n", l.actionWidth, "failed", l.workspaceWidth, workspaceID, target, err)
+}
+
+func (l vanishOutputLayout) writeMissingWorkspaceTarget(w io.Writer, workspaceID, target, workspaceRoot string) {
+	if !l.allWorkspaces {
+		fmt.Fprintf(w, "missing root target: %s  workspace: %s  note: target not inspected; lease cleared\n", target, workspaceRoot)
+		return
+	}
+
+	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s  workspace: %s  note: target not inspected; lease cleared\n", l.actionWidth, "missing root", l.workspaceWidth, workspaceID, target, workspaceRoot)
+}
+
+func wrapVanishTargetError(allWorkspaces bool, workspaceID, target string, err error) error {
+	if !allWorkspaces {
+		return fmt.Errorf("%s: %w", target, err)
+	}
+
+	return fmt.Errorf("%s: %w", emergeTargetLabel(allWorkspaces, workspaceID, target), err)
 }
 
 func vanishTarget(fs vanishFileSystem, workspaceTargetPath, storeTargetPath string) (string, error) {
