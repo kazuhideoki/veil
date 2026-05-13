@@ -18,9 +18,13 @@ func main() {
 	flag.Parse()
 
 	if err := run(flag.Args(), os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		writeError(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func writeError(w io.Writer, err error) {
+	fmt.Fprintf(w, "\x1b[31m%v\x1b[0m\n", err)
 }
 
 func run(args []string, stdout, stderr io.Writer) error {

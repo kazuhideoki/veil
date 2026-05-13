@@ -22,6 +22,17 @@ func TestRunWithUnsupportedArgsReturnsError(t *testing.T) {
 	}
 }
 
+func TestWriteErrorPrintsErrorInRed(t *testing.T) {
+	var stderr bytes.Buffer
+
+	writeError(&stderr, fmt.Errorf("unsupported arguments: [unsupported]"))
+
+	const want = "\x1b[31munsupported arguments: [unsupported]\x1b[0m\n"
+	if stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
+	}
+}
+
 func TestRunInitCreatesConfig(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
