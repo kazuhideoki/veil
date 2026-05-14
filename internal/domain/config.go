@@ -231,8 +231,20 @@ func validateWorkspaceID(id string) error {
 }
 
 func (c Config) ResolveWorkspaceByDir(dir string) (string, Workspace, error) {
+	resolvedID, resolvedWorkspace, ok, err := c.FindWorkspaceByDir(dir)
+	if err != nil {
+		return "", Workspace{}, err
+	}
+	if !ok {
+		return "", Workspace{}, fmt.Errorf("workspace is not registered for directory: %s", dir)
+	}
+
+	return resolvedID, resolvedWorkspace, nil
+}
+
+func (c Config) FindWorkspaceByDir(dir string) (string, Workspace, bool, error) {
 	if dir == "" {
-		return "", Workspace{}, fmt.Errorf("workspace directory must not be empty")
+		return "", Workspace{}, false, fmt.Errorf("workspace directory must not be empty")
 	}
 
 	var (
@@ -255,10 +267,10 @@ func (c Config) ResolveWorkspaceByDir(dir string) (string, Workspace, error) {
 	}
 
 	if resolvedID == "" {
-		return "", Workspace{}, fmt.Errorf("workspace is not registered for directory: %s", dir)
+		return "", Workspace{}, false, nil
 	}
 
-	return resolvedID, resolvedWorkspace, nil
+	return resolvedID, resolvedWorkspace, true, nil
 }
 
 func (w *Workspace) AddTarget(target string) error {

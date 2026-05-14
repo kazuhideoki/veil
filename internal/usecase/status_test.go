@@ -77,6 +77,7 @@ func TestStatusTargetsReportsMountedAbsentMissingSourceAndShadowed(t *testing.T)
 	}
 
 	for _, want := range []string{
+		"Workspace:\n  current_dir: " + resolvedWorkspaceRoot + "\n  registered: yes\n  id: myapp\n  root: " + resolvedWorkspaceRoot,
 		"mounted target: .env",
 		"absent target: config/local.json",
 		"missing-source target: config/missing.json",
@@ -85,6 +86,60 @@ func TestStatusTargetsReportsMountedAbsentMissingSourceAndShadowed(t *testing.T)
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
 		}
+	}
+}
+
+func TestStatusTargetsReportsUnregisteredWorkspaceWithoutFailing(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	storeRoot := filepath.Join(tempHome, "veil-store")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	otherRoot := filepath.Join(tempHome, "other")
+	for _, path := range []string{workspaceRoot, otherRoot} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+	}
+
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	resolvedOtherRoot, err := filepath.EvalSymlinks(otherRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), "version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n[workspaces.myapp]\nroot = "+workspaceRootQuoted(resolvedWorkspaceRoot)+"\ntargets = [\".env\"]\n")
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+
+	if err := os.Chdir(otherRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	uc := StatusTargets{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &stdout,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	want := "Workspace:\n  current_dir: " + resolvedOtherRoot + "\n  registered: no\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
 }
 

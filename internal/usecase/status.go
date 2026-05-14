@@ -55,7 +55,7 @@ func (u StatusTargets) Run() error {
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 
-	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
+	workspaceID, workspace, registered, err := config.FindWorkspaceByDir(currentDir)
 	if err != nil {
 		return err
 	}
@@ -67,6 +67,11 @@ func (u StatusTargets) Run() error {
 
 	now := currentTime(u.Now)
 	writeStoreStatus(u.Stdout, u.FileSystem, u.StoreStatusChecker, config, state, now)
+	writeWorkspaceStatus(u.Stdout, currentDir, workspaceID, workspace, registered)
+
+	if !registered {
+		return nil
+	}
 
 	for _, target := range workspace.Targets {
 		storeTargetPath, err := config.StoreTargetPath(workspaceID, target)
@@ -92,6 +97,19 @@ func (u StatusTargets) Run() error {
 	}
 
 	return nil
+}
+
+func writeWorkspaceStatus(w io.Writer, currentDir, workspaceID string, workspace domain.Workspace, registered bool) {
+	fmt.Fprintln(w, "Workspace:")
+	fmt.Fprintf(w, "  current_dir: %s\n", currentDir)
+	if !registered {
+		fmt.Fprintln(w, "  registered: no")
+		return
+	}
+
+	fmt.Fprintln(w, "  registered: yes")
+	fmt.Fprintf(w, "  id: %s\n", workspaceID)
+	fmt.Fprintf(w, "  root: %s\n", workspace.Root)
 }
 
 func writeStoreStatus(w io.Writer, fs statusFileSystem, checker EncryptedStoreStatusChecker, config domain.Config, state domain.State, now time.Time) {
