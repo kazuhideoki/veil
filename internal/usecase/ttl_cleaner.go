@@ -14,11 +14,12 @@ type ttlCleanerFileSystem interface {
 }
 
 type RunTTLCleaner struct {
-	FileSystem   ttlCleanerFileSystem
-	StoreRuntime EncryptedStoreRuntime
-	Stdout       io.Writer
-	Now          func() time.Time
-	Force        bool
+	FileSystem     ttlCleanerFileSystem
+	StoreRuntime   EncryptedStoreRuntime
+	Stdout         io.Writer
+	Now            func() time.Time
+	Force          bool
+	ForceAvailable bool
 }
 
 func (u RunTTLCleaner) Run() error {
@@ -57,7 +58,7 @@ func (u RunTTLCleaner) cleanupExpiredLeases() error {
 		}
 	}
 	if needsStoreMount {
-		if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, u.Force); err != nil {
+		if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, u.Force, u.ForceAvailable); err != nil {
 			return err
 		}
 	}

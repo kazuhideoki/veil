@@ -38,7 +38,7 @@ func (EncryptedVolumeRuntime) IsMounted(config domain.Config) bool {
 	return isMountedStore(config)
 }
 
-func (EncryptedVolumeRuntime) EnsureMounted(config domain.Config, now time.Time, warnings io.Writer, force bool) error {
+func (EncryptedVolumeRuntime) EnsureMounted(config domain.Config, now time.Time, warnings io.Writer, force, forceAvailable bool) error {
 	if err := validateEncryptedConfig(config); err != nil {
 		return err
 	}
@@ -46,13 +46,13 @@ func (EncryptedVolumeRuntime) EnsureMounted(config domain.Config, now time.Time,
 	if err != nil {
 		fmt.Fprintf(warnings, "warning: failed to read session metadata: %v\n", err)
 		if !force {
-			return fmt.Errorf("failed to verify VeilStore session metadata; rerun with --force to continue without consistency guarantees: %w", err)
+			return fmt.Errorf("failed to verify VeilStore session metadata%s: %w", consistencyRetryHint(forceAvailable), err)
 		}
 	}
 	if len(activeSessions) > 0 {
-		writeActiveSessionWarning(warnings, activeSessions, force)
+		writeActiveSessionWarning(warnings, activeSessions, force, forceAvailable)
 		if !force {
-			return fmt.Errorf("VeilStore appears active on another device; rerun with --force to continue without consistency guarantees")
+			return fmt.Errorf("VeilStore appears active on another device%s", consistencyRetryHint(forceAvailable))
 		}
 	}
 	if isMountedStore(config) {
@@ -221,7 +221,7 @@ func activeOtherSessions(config domain.Config, now time.Time) ([]activeSession, 
 	return active, nil
 }
 
-func writeActiveSessionWarning(warnings io.Writer, sessions []activeSession, forced bool) {
+func writeActiveSessionWarning(warnings io.Writer, sessions []activeSession, forced, forceAvailable bool) {
 	fmt.Fprintln(warnings, "warning: VeilStore appears active on another device:")
 	for _, session := range sessions {
 		fmt.Fprintf(warnings, "  host: %s\n  last seen: %s\n", session.Host, session.LastSeen.Format(time.RFC3339))
@@ -231,8 +231,19 @@ func writeActiveSessionWarning(warnings io.Writer, sessions []activeSession, for
 		fmt.Fprintln(warnings, "Veil does not guarantee file consistency after forced multi-device use.")
 		return
 	}
-	fmt.Fprintln(warnings, "\nRefusing to emerge because concurrent sparsebundle use may read stale data or create conflicts.")
-	fmt.Fprintln(warnings, "Run veil vanish on the other device, wait for iCloud sync, then retry. Use --force only if you accept the consistency risk.")
+	fmt.Fprintln(warnings, "\nRefusing to mount VeilStore because concurrent sparsebundle use may read stale data or create conflicts.")
+	if forceAvailable {
+		fmt.Fprintln(warnings, "Run veil vanish on the other device, wait for iCloud sync, then retry. Use --force only if you accept the consistency risk.")
+		return
+	}
+	fmt.Fprintln(warnings, "Run veil vanish on the other device, wait for iCloud sync, then retry.")
+}
+
+func consistencyRetryHint(forceAvailable bool) string {
+	if forceAvailable {
+		return "; rerun with --force to continue without consistency guarantees"
+	}
+	return "; wait for iCloud sync, then retry"
 }
 
 func readSession(path string) (sessionFile, error) {

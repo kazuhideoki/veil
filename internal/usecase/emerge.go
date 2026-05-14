@@ -66,7 +66,7 @@ func (u EmergeTargets) Run() (runErr error) {
 	}
 
 	now := currentTime(u.Now)
-	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, u.Force); err != nil {
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, u.Force, true); err != nil {
 		return err
 	}
 	defer func() {

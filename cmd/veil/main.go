@@ -204,10 +204,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		cleaner := usecase.RunTTLCleaner{
-			FileSystem:   infra.OSFileSystem{},
-			StoreRuntime: infra.EncryptedVolumeRuntime{},
-			Stdout:       stdout,
-			Force:        force,
+			FileSystem:     infra.OSFileSystem{},
+			StoreRuntime:   infra.EncryptedVolumeRuntime{},
+			Stdout:         stdout,
+			Force:          force,
+			ForceAvailable: true,
 		}
 		if err := cleaner.Run(); err != nil {
 			return err

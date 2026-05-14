@@ -46,15 +46,47 @@ func TestEnsureMountedRejectsActiveOtherSessionWithoutForce(t *testing.T) {
 
 	config := encryptedConfigForInfraTest(tempHome, sessionDir)
 	var warnings bytes.Buffer
-	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false)
+	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false, true)
 	if err == nil {
 		t.Fatal("EnsureMounted() returned nil error")
 	}
 	if !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("error = %q", err)
 	}
-	if !strings.Contains(warnings.String(), "Refusing to emerge") {
+	if !strings.Contains(warnings.String(), "Refusing to mount VeilStore") {
 		t.Fatalf("warnings = %q", warnings.String())
+	}
+}
+
+func TestEnsureMountedRejectsActiveOtherSessionWithoutForceAvailable(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	sessionDir := filepath.Join(tempHome, "sessions")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	sessionJSON := fmt.Sprintf(`{"version":1,"session_id":"other","store_id":"default","host":"other-mac","last_seen_at":%q,"mount_path":"/tmp/mount","state":"mounted"}`, now.Add(-time.Minute).Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(sessionDir, "other.json"), []byte(sessionJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	config := encryptedConfigForInfraTest(tempHome, sessionDir)
+	var warnings bytes.Buffer
+	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false, false)
+	if err == nil {
+		t.Fatal("EnsureMounted() returned nil error")
+	}
+	if strings.Contains(err.Error(), "--force") {
+		t.Fatalf("error = %q, want no --force guidance", err)
+	}
+	if strings.Contains(warnings.String(), "--force") {
+		t.Fatalf("warnings = %q, want no --force guidance", warnings.String())
+	}
+	if !strings.Contains(err.Error(), "wait for iCloud sync") {
+		t.Fatalf("error = %q, want retry guidance", err)
 	}
 }
 
@@ -82,7 +114,7 @@ func TestEnsureMountedRejectsActiveOtherSessionWhenAlreadyMounted(t *testing.T) 
 	}
 
 	var warnings bytes.Buffer
-	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false)
+	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false, true)
 	if err == nil {
 		t.Fatal("EnsureMounted() returned nil error")
 	}
@@ -108,7 +140,7 @@ func TestEnsureMountedWithForceWarnsAndContinuesPastActiveOtherSession(t *testin
 
 	config := encryptedConfigForInfraTest(tempHome, sessionDir)
 	var warnings bytes.Buffer
-	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, true)
+	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, true, true)
 	if err == nil {
 		t.Fatal("EnsureMounted() returned nil error")
 	}
@@ -135,7 +167,7 @@ func TestEnsureMountedRejectsUnreadableSessionMetadataWithoutForce(t *testing.T)
 	config := encryptedConfigForInfraTest(tempHome, sessionDir)
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	var warnings bytes.Buffer
-	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false)
+	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false, true)
 	if err == nil {
 		t.Fatal("EnsureMounted() returned nil error")
 	}
@@ -144,6 +176,33 @@ func TestEnsureMountedRejectsUnreadableSessionMetadataWithoutForce(t *testing.T)
 	}
 	if !strings.Contains(warnings.String(), "failed to read session metadata") {
 		t.Fatalf("warnings = %q", warnings.String())
+	}
+}
+
+func TestEnsureMountedRejectsUnreadableSessionMetadataWithoutForceAvailable(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	sessionDir := filepath.Join(tempHome, "sessions")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "partial.json"), []byte(`{"version":1,`), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	config := encryptedConfigForInfraTest(tempHome, sessionDir)
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	var warnings bytes.Buffer
+	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false, false)
+	if err == nil {
+		t.Fatal("EnsureMounted() returned nil error")
+	}
+	if strings.Contains(err.Error(), "--force") {
+		t.Fatalf("error = %q, want no --force guidance", err)
+	}
+	if !strings.Contains(err.Error(), "wait for iCloud sync") {
+		t.Fatalf("error = %q, want retry guidance", err)
 	}
 }
 
@@ -162,7 +221,7 @@ func TestEnsureMountedWithForceContinuesPastUnreadableSessionMetadata(t *testing
 	config := encryptedConfigForInfraTest(tempHome, sessionDir)
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	var warnings bytes.Buffer
-	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, true)
+	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, true, true)
 	if err == nil {
 		t.Fatal("EnsureMounted() returned nil error")
 	}
@@ -187,7 +246,7 @@ func TestEnsureMountedRejectsInvalidSessionStaleAfterWithoutForce(t *testing.T) 
 	config.Session.StaleAfter = "tomorrow"
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	var warnings bytes.Buffer
-	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false)
+	err := EncryptedVolumeRuntime{}.EnsureMounted(config, now, &warnings, false, true)
 	if err == nil {
 		t.Fatal("EnsureMounted() returned nil error")
 	}
