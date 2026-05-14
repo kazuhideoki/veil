@@ -68,7 +68,7 @@ func (u AddTarget) Run() error {
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 	now := currentTime(u.Now)
-	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, false); err != nil {
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, false, false); err != nil {
 		return err
 	}
 	defer func() {

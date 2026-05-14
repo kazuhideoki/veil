@@ -60,7 +60,7 @@ func (u EditTarget) Run() error {
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 	now := currentTime(u.Now)
-	if err := ensureStoreAvailable(u.StoreRuntime, config, now, io.Discard, false); err != nil {
+	if err := ensureStoreAvailable(u.StoreRuntime, config, now, io.Discard, false, false); err != nil {
 		return err
 	}
 	defer func() {

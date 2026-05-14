@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,11 +145,83 @@ func TestVanishTargetsUnmountsEncryptedVolumeWhenIdle(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if runtime.ensureCalls != 1 {
-		t.Fatalf("ensure calls = %d, want 1", runtime.ensureCalls)
+	if runtime.ensureCalls != 0 {
+		t.Fatalf("ensure calls = %d, want 0", runtime.ensureCalls)
 	}
 	if runtime.unmountCalls != 1 {
 		t.Fatalf("unmount calls = %d, want 1", runtime.unmountCalls)
+	}
+}
+
+func TestVanishTargetsAllWorkspacesDoesNotMountEncryptedVolume(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	mountRoot := filepath.Join(tempHome, "veil-mount")
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"), encryptedConfigForTest(mountRoot, resolvedWorkspaceRoot))
+
+	storeTargetPath := filepath.Join(mountRoot, "workspaces", "myapp", ".env")
+	workspaceTargetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.Symlink(storeTargetPath, workspaceTargetPath); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	if err := state.UpsertLeaseForStore("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), domain.DefaultStoreID, workspaceTargetPath, storeTargetPath); err != nil {
+		t.Fatalf("UpsertLeaseForStore() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(tempHome); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	runtime := &recordingEncryptedStoreRuntime{ensureErr: errors.New("unexpected mount")}
+	var stdout bytes.Buffer
+	uc := VanishTargets{
+		FileSystem:    infra.OSFileSystem{},
+		StoreRuntime:  runtime,
+		Stdout:        &stdout,
+		Now:           func() time.Time { return now },
+		AllWorkspaces: true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if runtime.ensureCalls != 0 {
+		t.Fatalf("ensure calls = %d, want 0", runtime.ensureCalls)
+	}
+	if _, err := os.Lstat(workspaceTargetPath); !os.IsNotExist(err) {
+		t.Fatalf("workspace target still exists after vanish --all: err=%v", err)
+	}
+	for _, want := range []string{"vanished", "repo: myapp", "file: .env"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
+	}
+
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	if got := len(refreshed.Leases); got != 0 {
+		t.Fatalf("lease count = %d, want 0", got)
 	}
 }
 

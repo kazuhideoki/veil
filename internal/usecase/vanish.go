@@ -45,9 +45,6 @@ func (u VanishTargets) Run() error {
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 	now := currentTime(u.Now)
-	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, false); err != nil {
-		return err
-	}
 
 	statePath, state, err := loadState(u.FileSystem)
 	if err != nil {
