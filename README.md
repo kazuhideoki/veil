@@ -97,3 +97,7 @@ Veil is intentionally narrow in scope:
 ## Status
 
 This project is in early development.
+
+## License
+
+Veil is licensed under the MIT License. See [LICENSE](LICENSE) for details.
