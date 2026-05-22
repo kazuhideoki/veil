@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/kazuhideoki/veil/internal/domain"
@@ -82,7 +83,11 @@ func (u EmergeTargets) Run() (runErr error) {
 	}
 
 	if config.IsOnePasswordStore() {
-		return u.emergeOnePasswordDocuments(configPath, config, statePath, state, workspaces, now)
+		return u.emergeOnePasswordDocuments(configPath, config, statePath, &state, workspaces, now)
+	}
+
+	if u.AllWorkspaces {
+		return u.emergeFileStoreWorkspaces(config, statePath, &state, workspaces, now)
 	}
 
 	originalState := cloneState(state)
@@ -212,12 +217,16 @@ func (u EmergeTargets) Run() (runErr error) {
 	return nil
 }
 
-func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config domain.Config, statePath string, state domain.State, workspaces []emergeWorkspace, now time.Time) error {
+func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config domain.Config, statePath string, state *domain.State, workspaces []emergeWorkspace, now time.Time) error {
 	if err := requireOnePasswordRuntime(u.DocumentRuntime); err != nil {
 		return err
 	}
 
-	originalState := cloneState(state)
+	if u.AllWorkspaces {
+		return u.emergeOnePasswordWorkspaces(configPath, config, statePath, state, workspaces, now)
+	}
+
+	originalState := cloneState(*state)
 	createdTargetPaths := []string{}
 	configChanged := false
 	outputLayout := newEmergeOutputLayout(u.AllWorkspaces, workspaces)
@@ -272,7 +281,7 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 			}
 
 			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
-			created, err := ensureMaterializedFile(u.FileSystem, state, entry.id, target, workspaceTargetPath, document.ItemID, data, now)
+			created, err := ensureMaterializedFile(u.FileSystem, *state, entry.id, target, workspaceTargetPath, document.ItemID, data, now)
 			if err != nil {
 				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err)
 				if u.AllWorkspaces {
@@ -295,14 +304,14 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 				}
 				configChanged = true
 			}
-			if err := updateLeaseHash(&state, entry.id, target, workspaceTargetPath, document.ItemID, hash, now, ttl); err != nil {
+			if err := updateLeaseHash(state, entry.id, target, workspaceTargetPath, document.ItemID, hash, now, ttl); err != nil {
 				return wrappedErrOrRollback(u.FileSystem, statePath, originalState, createdTargetPaths, err)
 			}
 			outputLayout.writeTarget(u.Stdout, entry.id, emergeTargetLabel(u.AllWorkspaces, entry.id, target), target, created)
 		}
 	}
 
-	if err := persistState(u.FileSystem, statePath, state); err != nil {
+	if err := persistState(u.FileSystem, statePath, *state); err != nil {
 		return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, err)
 	}
 	if configChanged {
@@ -318,6 +327,383 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 		return emergeErr
 	}
 	return nil
+}
+
+const emergeParallelism = 4
+
+type emergeFileTask struct {
+	order       int
+	workspaceID string
+	workspace   domain.Workspace
+	target      string
+	ttl         time.Duration
+}
+
+type emergeFileResult struct {
+	order               int
+	workspaceID         string
+	target              string
+	workspaceTargetPath string
+	storeTargetPath     string
+	ttl                 time.Duration
+	created             bool
+	err                 error
+}
+
+func (u EmergeTargets) emergeFileStoreWorkspaces(config domain.Config, statePath string, state *domain.State, workspaces []emergeWorkspace, now time.Time) error {
+	originalState := cloneState(*state)
+	outputLayout := newEmergeOutputLayout(true, workspaces)
+	results := make([]emergeFileResult, 0)
+	tasks := make([]emergeFileTask, 0)
+	order := 0
+
+	for _, entry := range workspaces {
+		ttl, err := config.EffectiveTTL(entry.workspace)
+		if err != nil {
+			results = append(results, emergeFileResult{
+				order:       order,
+				workspaceID: entry.id,
+				err:         wrapEmergeWorkspaceError(true, entry.id, err),
+			})
+			order++
+			continue
+		}
+		if err := ensureWorkspaceRootExists(u.FileSystem, entry.workspace.Root); err != nil {
+			results = append(results, emergeFileResult{
+				order:       order,
+				workspaceID: entry.id,
+				err:         wrapEmergeWorkspaceError(true, entry.id, err),
+			})
+			order++
+			continue
+		}
+		for _, target := range entry.workspace.Targets {
+			tasks = append(tasks, emergeFileTask{
+				order:       order,
+				workspaceID: entry.id,
+				workspace:   entry.workspace,
+				target:      target,
+				ttl:         ttl,
+			})
+			order++
+		}
+	}
+
+	results = append(results, runEmergeFileTasks(u.FileSystem, config, tasks)...)
+	sort.Slice(results, func(i, j int) bool { return results[i].order < results[j].order })
+
+	createdTargetPaths := []string{}
+	var emergeErr error
+	for _, result := range results {
+		if result.err != nil {
+			if result.target == "" {
+				outputLayout.writeWorkspaceFailure(u.Stdout, result.workspaceID, result.err)
+			} else {
+				outputLayout.writeTargetFailure(u.Stdout, result.workspaceID, result.target, result.err)
+			}
+			emergeErr = errors.Join(emergeErr, result.err)
+			continue
+		}
+
+		if result.created {
+			createdTargetPaths = append(createdTargetPaths, result.workspaceTargetPath)
+		}
+		if err := state.UpsertLeaseForStore(result.workspaceID, result.target, now, now.Add(result.ttl), domain.DefaultStoreID, result.workspaceTargetPath, result.storeTargetPath); err != nil {
+			wrappedErr := wrapEmergeTargetError(true, result.workspaceID, result.target, err)
+			if result.created {
+				if removeErr := u.FileSystem.Remove(result.workspaceTargetPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					wrappedErr = errors.Join(wrappedErr, fmt.Errorf("rollback emerged target %s: %w", result.workspaceTargetPath, removeErr))
+				} else {
+					createdTargetPaths = createdTargetPaths[:len(createdTargetPaths)-1]
+				}
+			}
+			outputLayout.writeTargetFailure(u.Stdout, result.workspaceID, result.target, wrappedErr)
+			emergeErr = errors.Join(emergeErr, wrappedErr)
+			continue
+		}
+		outputLayout.writeTarget(u.Stdout, result.workspaceID, emergeTargetLabel(true, result.workspaceID, result.target), result.target, result.created)
+	}
+
+	if err := persistState(u.FileSystem, statePath, *state); err != nil {
+		return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, err)
+	}
+	return emergeErr
+}
+
+func runEmergeFileTasks(fs emergeFileSystem, config domain.Config, tasks []emergeFileTask) []emergeFileResult {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	workerCount := emergeParallelism
+	if len(tasks) < workerCount {
+		workerCount = len(tasks)
+	}
+
+	taskCh := make(chan emergeFileTask)
+	resultCh := make(chan emergeFileResult, len(tasks))
+	var wg sync.WaitGroup
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range taskCh {
+				resultCh <- runEmergeFileTask(fs, config, task)
+			}
+		}()
+	}
+
+	for _, task := range tasks {
+		taskCh <- task
+	}
+	close(taskCh)
+	wg.Wait()
+	close(resultCh)
+
+	results := make([]emergeFileResult, 0, len(tasks))
+	for result := range resultCh {
+		results = append(results, result)
+	}
+	return results
+}
+
+func runEmergeFileTask(fs emergeFileSystem, config domain.Config, task emergeFileTask) emergeFileResult {
+	result := emergeFileResult{
+		order:       task.order,
+		workspaceID: task.workspaceID,
+		target:      task.target,
+		ttl:         task.ttl,
+	}
+
+	storeTargetPath, err := config.StoreTargetPath(task.workspaceID, task.target)
+	if err != nil {
+		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, err)
+		return result
+	}
+	result.storeTargetPath = storeTargetPath
+
+	storeInfo, err := fs.Stat(storeTargetPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("store target does not exist: %s", task.target))
+			return result
+		}
+		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("stat store target: %w", err))
+		return result
+	}
+	if !storeInfo.Mode().IsRegular() {
+		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("store target must be a regular file: %s", task.target))
+		return result
+	}
+
+	workspaceTargetPath := filepath.Join(task.workspace.Root, task.target)
+	result.workspaceTargetPath = workspaceTargetPath
+	if err := fs.MkdirAll(filepath.Dir(workspaceTargetPath), 0o755); err != nil {
+		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("create workspace target directory: %w", err))
+		return result
+	}
+
+	created, err := ensureEmergedTarget(fs, workspaceTargetPath, storeTargetPath)
+	if err != nil {
+		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("%s: %w", task.target, err))
+		return result
+	}
+	result.created = created
+	return result
+}
+
+type emergeOnePasswordTask struct {
+	order       int
+	workspaceID string
+	workspace   domain.Workspace
+	target      string
+	ttl         time.Duration
+	document    domain.DocumentConfig
+	vault       string
+}
+
+type emergeOnePasswordResult struct {
+	order               int
+	workspaceID         string
+	target              string
+	workspaceTargetPath string
+	document            domain.DocumentConfig
+	ttl                 time.Duration
+	created             bool
+	configChanged       bool
+	err                 error
+}
+
+func (u EmergeTargets) emergeOnePasswordWorkspaces(configPath string, config domain.Config, statePath string, state *domain.State, workspaces []emergeWorkspace, now time.Time) error {
+	originalState := cloneState(*state)
+	outputLayout := newEmergeOutputLayout(true, workspaces)
+	results := make([]emergeOnePasswordResult, 0)
+	tasks := make([]emergeOnePasswordTask, 0)
+	order := 0
+
+	for _, entry := range workspaces {
+		ttl, err := config.EffectiveTTL(entry.workspace)
+		if err != nil {
+			results = append(results, emergeOnePasswordResult{
+				order:       order,
+				workspaceID: entry.id,
+				err:         wrapEmergeWorkspaceError(true, entry.id, err),
+			})
+			order++
+			continue
+		}
+		if err := ensureWorkspaceRootExists(u.FileSystem, entry.workspace.Root); err != nil {
+			results = append(results, emergeOnePasswordResult{
+				order:       order,
+				workspaceID: entry.id,
+				err:         wrapEmergeWorkspaceError(true, entry.id, err),
+			})
+			order++
+			continue
+		}
+
+		for _, target := range entry.workspace.Targets {
+			document, ok, err := config.DocumentForTarget(entry.id, target)
+			if err == nil && !ok {
+				err = fmt.Errorf("1Password document is not registered: %s", target)
+			}
+			if err != nil {
+				results = append(results, emergeOnePasswordResult{
+					order:       order,
+					workspaceID: entry.id,
+					target:      target,
+					err:         wrapEmergeTargetError(true, entry.id, target, err),
+				})
+				order++
+				continue
+			}
+
+			tasks = append(tasks, emergeOnePasswordTask{
+				order:       order,
+				workspaceID: entry.id,
+				workspace:   entry.workspace,
+				target:      target,
+				ttl:         ttl,
+				document:    document,
+				vault:       onePasswordVault(config, document),
+			})
+			order++
+		}
+	}
+
+	results = append(results, runEmergeOnePasswordTasks(u.FileSystem, u.DocumentRuntime, *state, now, tasks)...)
+	sort.Slice(results, func(i, j int) bool { return results[i].order < results[j].order })
+
+	createdTargetPaths := []string{}
+	configChanged := false
+	var emergeErr error
+	for _, result := range results {
+		if result.err != nil {
+			if result.target == "" {
+				outputLayout.writeWorkspaceFailure(u.Stdout, result.workspaceID, result.err)
+			} else {
+				outputLayout.writeTargetFailure(u.Stdout, result.workspaceID, result.target, result.err)
+			}
+			emergeErr = errors.Join(emergeErr, result.err)
+			continue
+		}
+
+		if result.created {
+			createdTargetPaths = append(createdTargetPaths, result.workspaceTargetPath)
+		}
+		if result.configChanged {
+			if err := config.UpsertDocument(result.document); err != nil {
+				return err
+			}
+			configChanged = true
+		}
+		if err := updateLeaseHash(state, result.workspaceID, result.target, result.workspaceTargetPath, result.document.ItemID, result.document.ContentSHA256, now, result.ttl); err != nil {
+			return wrappedErrOrRollback(u.FileSystem, statePath, originalState, createdTargetPaths, err)
+		}
+		outputLayout.writeTarget(u.Stdout, result.workspaceID, emergeTargetLabel(true, result.workspaceID, result.target), result.target, result.created)
+	}
+
+	if err := persistState(u.FileSystem, statePath, *state); err != nil {
+		return rollbackEmergeChanges(u.FileSystem, statePath, originalState, createdTargetPaths, err)
+	}
+	if configChanged {
+		if err := writeConfig(u.FileSystem, configPath, config); err != nil {
+			return err
+		}
+	}
+	return emergeErr
+}
+
+func runEmergeOnePasswordTasks(fs emergeFileSystem, runtime OnePasswordDocumentRuntime, state domain.State, now time.Time, tasks []emergeOnePasswordTask) []emergeOnePasswordResult {
+	if len(tasks) == 0 {
+		return nil
+	}
+
+	workerCount := emergeParallelism
+	if len(tasks) < workerCount {
+		workerCount = len(tasks)
+	}
+
+	taskCh := make(chan emergeOnePasswordTask)
+	resultCh := make(chan emergeOnePasswordResult, len(tasks))
+	var wg sync.WaitGroup
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range taskCh {
+				resultCh <- runEmergeOnePasswordTask(fs, runtime, state, now, task)
+			}
+		}()
+	}
+
+	for _, task := range tasks {
+		taskCh <- task
+	}
+	close(taskCh)
+	wg.Wait()
+	close(resultCh)
+
+	results := make([]emergeOnePasswordResult, 0, len(tasks))
+	for result := range resultCh {
+		results = append(results, result)
+	}
+	return results
+}
+
+func runEmergeOnePasswordTask(fs emergeFileSystem, runtime OnePasswordDocumentRuntime, state domain.State, now time.Time, task emergeOnePasswordTask) emergeOnePasswordResult {
+	result := emergeOnePasswordResult{
+		order:       task.order,
+		workspaceID: task.workspaceID,
+		target:      task.target,
+		document:    task.document,
+		ttl:         task.ttl,
+	}
+
+	data, err := runtime.ReadDocument(task.vault, task.document.ItemID)
+	if err != nil {
+		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("read 1Password document: %w", err))
+		return result
+	}
+
+	workspaceTargetPath := filepath.Join(task.workspace.Root, task.target)
+	result.workspaceTargetPath = workspaceTargetPath
+	created, err := ensureMaterializedFile(fs, state, task.workspaceID, task.target, workspaceTargetPath, task.document.ItemID, data, now)
+	if err != nil {
+		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, err)
+		return result
+	}
+	result.created = created
+
+	hash := sha256Hex(data)
+	if result.document.ContentSHA256 != hash || result.document.Vault != task.vault {
+		result.document.ContentSHA256 = hash
+		result.document.Vault = task.vault
+		result.configChanged = true
+	}
+	return result
 }
 
 func wrappedErrOrRollback(fs emergeFileSystem, statePath string, originalState domain.State, createdTargetPaths []string, err error) error {
