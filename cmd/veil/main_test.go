@@ -827,7 +827,7 @@ func TestRunStatusReportsMountedTarget(t *testing.T) {
 		t.Fatalf("run(status) returned error: %v", err)
 	}
 
-	if !strings.Contains(stdout.String(), "mounted target: .env") {
+	if !strings.Contains(stdout.String(), "Targets:\n  myapp  mounted") || !strings.Contains(stdout.String(), ".env") {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 }

@@ -15,7 +15,7 @@ Commands:
   purge     Delete a registered target from Veil store and config
   workspace Remove or purge the active workspace registration
   emerge    Create workspace symlinks or materialized files for registered targets (--all, --force)
-  status    Show current target states for the active workspace
+  status    Show target states for all registered workspaces
   vanish    Remove Veil-managed workspace targets (--all, --commit, --discard)
 
 Options:

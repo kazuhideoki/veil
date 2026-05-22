@@ -78,10 +78,13 @@ func TestStatusTargetsReportsMountedAbsentMissingSourceAndShadowed(t *testing.T)
 
 	for _, want := range []string{
 		"Workspace:\n  current_dir: " + resolvedWorkspaceRoot + "\n  registered: yes\n  id: myapp\n  root: " + resolvedWorkspaceRoot,
-		"mounted target: .env",
-		"absent target: config/local.json",
-		"missing-source target: config/missing.json",
-		"shadowed target: token.txt",
+		"Targets:\n  myapp  mounted",
+		"absent",
+		"config/local.json",
+		"missing-source",
+		"config/missing.json",
+		"shadowed",
+		"token.txt",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
@@ -137,9 +140,14 @@ func TestStatusTargetsReportsUnregisteredWorkspaceWithoutFailing(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	want := "Workspace:\n  current_dir: " + resolvedOtherRoot + "\n  registered: no\n"
-	if stdout.String() != want {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	for _, want := range []string{
+		"Workspace:\n  current_dir: " + resolvedOtherRoot + "\n  registered: no\n",
+		"Targets:\n  myapp  missing-source",
+		".env",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
 	}
 }
 
@@ -228,7 +236,8 @@ func TestStatusTargetsReportsEncryptedStoreWithoutMounting(t *testing.T) {
 		"Store:\n  backend: encrypted_volume\n  mounted: yes\n  mount_path: " + mountRoot,
 		"Local leases:\n  myapp .env expires at ",
 		"Other sessions:\n  other-mac last seen ",
-		"mounted target: .env",
+		"Targets:\n  myapp  mounted",
+		".env",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
@@ -311,8 +320,9 @@ func TestStatusTargetsTreatsForeignAndBrokenSymlinksAsShadowed(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"shadowed target: foreign.txt",
-		"shadowed target: broken.txt",
+		"shadowed",
+		"foreign.txt",
+		"broken.txt",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
@@ -378,7 +388,167 @@ func TestStatusTargetsReportsExpiredWhenLeaseHasElapsed(t *testing.T) {
 		t.Fatalf("Run() returned error: %v", err)
 	}
 
-	if !strings.Contains(stdout.String(), "expired target: .env") {
+	if !strings.Contains(stdout.String(), "expired") || !strings.Contains(stdout.String(), ".env") {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestStatusTargetsReportsAllWorkspaces(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	storeRoot := filepath.Join(tempHome, "veil-store")
+	alphaRoot := filepath.Join(tempHome, "alpha")
+	betaRoot := filepath.Join(tempHome, "beta")
+	otherRoot := filepath.Join(tempHome, "other")
+	for _, path := range []string{alphaRoot, betaRoot, otherRoot} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+	}
+
+	resolvedAlphaRoot, err := filepath.EvalSymlinks(alphaRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	resolvedBetaRoot, err := filepath.EvalSymlinks(betaRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"),
+		"version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n"+
+			"[workspaces.alpha]\nroot = "+workspaceRootQuoted(resolvedAlphaRoot)+"\ntargets = [\".env\"]\n\n"+
+			"[workspaces.beta]\nroot = "+workspaceRootQuoted(resolvedBetaRoot)+"\ntargets = [\"config/app.json\"]\n")
+
+	alphaStorePath := filepath.Join(storeRoot, "workspaces", "alpha", ".env")
+	betaStorePath := filepath.Join(storeRoot, "workspaces", "beta", "config", "app.json")
+	for _, path := range []string{alphaStorePath, betaStorePath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("secret\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile() returned error: %v", err)
+		}
+	}
+	if err := os.Symlink(alphaStorePath, filepath.Join(alphaRoot, ".env")); err != nil {
+		t.Fatalf("Symlink() returned error: %v", err)
+	}
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(otherRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	uc := StatusTargets{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &stdout,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	for _, want := range []string{
+		"registered: no",
+		"Targets:",
+		"alpha  mounted",
+		".env",
+		"beta   absent",
+		"config/app.json",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestStatusTargetsReportsOnePasswordDocumentState(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"),
+		"version = 2\ndefault_ttl = \"24h\"\n\n"+
+			"[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n\n"+
+			"[[documents]]\nworkspace_id = \"myapp\"\ntarget = \".env\"\nitem_id = \"item-1\"\ncontent_sha256 = \""+sha256Hex([]byte("TOKEN=secret\n"))+"\"\n\n"+
+			"[[documents]]\nworkspace_id = \"myapp\"\ntarget = \"local.json\"\nitem_id = \"item-2\"\n\n"+
+			"[[documents]]\nworkspace_id = \"myapp\"\ntarget = \"expired.txt\"\nitem_id = \"item-3\"\n\n"+
+			"[workspaces.myapp]\nroot = "+workspaceRootQuoted(resolvedWorkspaceRoot)+"\ntargets = [\".env\", \"local.json\", \"missing-doc.txt\", \"expired.txt\"]\n")
+
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "local.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "expired.txt"), []byte("old\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, filepath.Join(resolvedWorkspaceRoot, ".env"), "item-1", sha256Hex([]byte("TOKEN=secret\n"))); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	if err := state.UpsertLeaseWithHash("myapp", "expired.txt", now.Add(-2*time.Hour), now.Add(-time.Hour), onePasswordStoreID, filepath.Join(resolvedWorkspaceRoot, "expired.txt"), "item-3", sha256Hex([]byte("old\n"))); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+
+	previousWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() returned error: %v", err)
+	}
+	if err := os.Chdir(workspaceRoot); err != nil {
+		t.Fatalf("Chdir() returned error: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(previousWD); err != nil {
+			t.Fatalf("restore Chdir() returned error: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	uc := StatusTargets{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &stdout,
+		Now:        func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	for _, want := range []string{
+		"materialized",
+		".env",
+		"untracked",
+		"local.json",
+		"missing-document",
+		"missing-doc.txt",
+		"expired",
+		"expired.txt",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+		}
 	}
 }

@@ -1,12 +1,15 @@
 package usecase
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -68,35 +71,7 @@ func (u StatusTargets) Run() error {
 	now := currentTime(u.Now)
 	writeStoreStatus(u.Stdout, u.FileSystem, u.StoreStatusChecker, config, state, now)
 	writeWorkspaceStatus(u.Stdout, currentDir, workspaceID, workspace, registered)
-
-	if !registered {
-		return nil
-	}
-
-	for _, target := range workspace.Targets {
-		storeTargetPath, err := config.StoreTargetPath(workspaceID, target)
-		if err != nil {
-			return err
-		}
-
-		workspaceTargetPath := filepath.Join(workspace.Root, target)
-		status, err := detectTargetStatus(u.FileSystem, workspaceTargetPath, storeTargetPath)
-		if err != nil {
-			return fmt.Errorf("%s: %w", target, err)
-		}
-
-		lease, ok, err := state.FindLease(workspaceID, target)
-		if err != nil {
-			return err
-		}
-		if ok && status == "mounted" && !lease.ExpiresAt.After(now) {
-			status = "expired"
-		}
-
-		fmt.Fprintf(u.Stdout, "%s target: %s\n", status, target)
-	}
-
-	return nil
+	return writeAllWorkspaceTargetStatus(u.Stdout, u.FileSystem, config, state, now)
 }
 
 func writeWorkspaceStatus(w io.Writer, currentDir, workspaceID string, workspace domain.Workspace, registered bool) {
@@ -194,6 +169,113 @@ func writeOtherSessions(w io.Writer, fs statusFileSystem, config domain.Config, 
 	if !found {
 		fmt.Fprintln(w, "  none")
 	}
+}
+
+func writeAllWorkspaceTargetStatus(w io.Writer, fs statusFileSystem, config domain.Config, state domain.State, now time.Time) error {
+	fmt.Fprintln(w, "Targets:")
+	workspaceIDs := make([]string, 0, len(config.Workspaces))
+	for workspaceID := range config.Workspaces {
+		workspaceIDs = append(workspaceIDs, workspaceID)
+	}
+	sort.Strings(workspaceIDs)
+
+	if len(workspaceIDs) == 0 {
+		fmt.Fprintln(w, "  none")
+		return nil
+	}
+
+	width := 0
+	for _, workspaceID := range workspaceIDs {
+		if len(workspaceID) > width {
+			width = len(workspaceID)
+		}
+	}
+
+	for _, workspaceID := range workspaceIDs {
+		workspace := config.Workspaces[workspaceID]
+		if len(workspace.Targets) == 0 {
+			fmt.Fprintf(w, "  %-*s  none\n", width, workspaceID)
+			continue
+		}
+		for _, target := range workspace.Targets {
+			status, err := detectWorkspaceTargetStatus(fs, config, state, workspaceID, workspace, target, now)
+			if err != nil {
+				return fmt.Errorf("%s/%s: %w", workspaceID, target, err)
+			}
+			fmt.Fprintf(w, "  %-*s  %-16s  %s\n", width, workspaceID, status, target)
+		}
+	}
+	return nil
+}
+
+func detectWorkspaceTargetStatus(fs statusFileSystem, config domain.Config, state domain.State, workspaceID string, workspace domain.Workspace, target string, now time.Time) (string, error) {
+	workspaceTargetPath := filepath.Join(workspace.Root, target)
+	if config.IsOnePasswordStore() {
+		return detectOnePasswordTargetStatus(fs, config, state, workspaceID, target, workspaceTargetPath, now)
+	}
+
+	storeTargetPath, err := config.StoreTargetPath(workspaceID, target)
+	if err != nil {
+		return "", err
+	}
+	status, err := detectTargetStatus(fs, workspaceTargetPath, storeTargetPath)
+	if err != nil {
+		return "", err
+	}
+
+	lease, ok, err := state.FindLease(workspaceID, target)
+	if err != nil {
+		return "", err
+	}
+	if ok && status == "mounted" && !lease.ExpiresAt.After(now) {
+		return "expired", nil
+	}
+	return status, nil
+}
+
+func detectOnePasswordTargetStatus(fs statusFileSystem, config domain.Config, state domain.State, workspaceID, target, workspaceTargetPath string, now time.Time) (string, error) {
+	document, ok, err := config.DocumentForTarget(workspaceID, target)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "missing-document", nil
+	}
+
+	info, err := fs.Lstat(workspaceTargetPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "absent", nil
+		}
+		return "", fmt.Errorf("stat workspace target: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "shadowed", nil
+	}
+
+	lease, ok, err := state.FindLease(workspaceID, target)
+	if err != nil {
+		return "", err
+	}
+	if !ok || lease.StoreID != onePasswordStoreID || lease.StorePath != document.ItemID || lease.PlaintextHash == "" {
+		return "untracked", nil
+	}
+	if !lease.ExpiresAt.After(now) {
+		return "expired", nil
+	}
+	if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
+		return "untracked", nil
+	}
+
+	data, err := fs.ReadFile(workspaceTargetPath)
+	if err != nil {
+		return "", fmt.Errorf("read workspace target: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	if hex.EncodeToString(sum[:]) != lease.PlaintextHash {
+		return "modified", nil
+	}
+	return "materialized", nil
 }
 
 func readLocalSessionID(fs statusFileSystem) string {
