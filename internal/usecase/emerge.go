@@ -592,6 +592,11 @@ func (u EmergeTargets) emergeOnePasswordWorkspaces(configPath string, config dom
 		}
 	}
 
+	if len(tasks) > 0 {
+		if err := authenticateOnePasswordRuntime(u.DocumentRuntime); err != nil {
+			return err
+		}
+	}
 	results = append(results, runEmergeOnePasswordTasks(u.FileSystem, u.DocumentRuntime, *state, now, tasks)...)
 	sort.Slice(results, func(i, j int) bool { return results[i].order < results[j].order })
 

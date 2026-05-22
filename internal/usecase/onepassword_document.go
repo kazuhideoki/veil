@@ -21,6 +21,10 @@ type OnePasswordDocumentRuntime interface {
 	UpdateDocument(vault, itemID string, data []byte) error
 }
 
+type onePasswordDocumentAuthenticator interface {
+	Authenticate() error
+}
+
 type onePasswordMaterializedFileSystem interface {
 	Lstat(name string) (os.FileInfo, error)
 	ReadFile(name string) ([]byte, error)
@@ -52,6 +56,17 @@ func sha256Hex(data []byte) string {
 func requireOnePasswordRuntime(runtime OnePasswordDocumentRuntime) error {
 	if runtime == nil {
 		return fmt.Errorf("1Password document store requires a document runtime")
+	}
+	return nil
+}
+
+func authenticateOnePasswordRuntime(runtime OnePasswordDocumentRuntime) error {
+	authenticator, ok := runtime.(onePasswordDocumentAuthenticator)
+	if !ok {
+		return nil
+	}
+	if err := authenticator.Authenticate(); err != nil {
+		return fmt.Errorf("authenticate 1Password CLI: %w", err)
 	}
 	return nil
 }
