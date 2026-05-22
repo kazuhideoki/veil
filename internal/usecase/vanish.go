@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/kazuhideoki/veil/internal/domain"
 )
 
 type vanishFileSystem interface {
@@ -24,11 +26,14 @@ type vanishFileSystem interface {
 }
 
 type VanishTargets struct {
-	FileSystem    vanishFileSystem
-	StoreRuntime  EncryptedStoreRuntime
-	Stdout        io.Writer
-	Now           func() time.Time
-	AllWorkspaces bool
+	FileSystem      vanishFileSystem
+	StoreRuntime    EncryptedStoreRuntime
+	DocumentRuntime OnePasswordDocumentRuntime
+	Stdout          io.Writer
+	Now             func() time.Time
+	AllWorkspaces   bool
+	Commit          bool
+	Discard         bool
 }
 
 func (u VanishTargets) Run() error {
@@ -54,6 +59,10 @@ func (u VanishTargets) Run() error {
 	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
 	if err != nil {
 		return err
+	}
+
+	if config.IsOnePasswordStore() {
+		return u.vanishOnePasswordDocuments(config, statePath, state, workspaces, now)
 	}
 
 	outputLayout := newVanishOutputLayout(u.AllWorkspaces, workspaces)
@@ -129,6 +138,144 @@ func (u VanishTargets) Run() error {
 		return vanishErr
 	}
 
+	return nil
+}
+
+func (u VanishTargets) vanishOnePasswordDocuments(config domain.Config, statePath string, state domain.State, workspaces []emergeWorkspace, now time.Time) error {
+	if u.Commit && u.Discard {
+		return fmt.Errorf("vanish accepts only one of --commit or --discard")
+	}
+	if u.Commit {
+		if err := requireOnePasswordRuntime(u.DocumentRuntime); err != nil {
+			return err
+		}
+	}
+
+	outputLayout := newVanishOutputLayout(u.AllWorkspaces, workspaces)
+	var vanishErr error
+	configChanged := false
+
+	for _, entry := range workspaces {
+		ttl, err := config.EffectiveTTL(entry.workspace)
+		if err != nil {
+			return err
+		}
+		for _, target := range entry.workspace.Targets {
+			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
+			lease, hasLease, err := state.FindLease(entry.id, target)
+			if err != nil {
+				return err
+			}
+			info, statErr := u.FileSystem.Lstat(workspaceTargetPath)
+			if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("stat workspace target: %w", statErr))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrappedErr
+			}
+			if errors.Is(statErr, os.ErrNotExist) {
+				if err := state.RemoveLease(entry.id, target); err != nil {
+					return err
+				}
+				outputLayout.writeTarget(u.Stdout, entry.id, target, "already vanished")
+				continue
+			}
+			if !hasLease {
+				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("workspace target is not emerged by Veil: %s", target))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrappedErr
+			}
+			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("workspace target must be a Veil materialized regular file"))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrappedErr
+			}
+			data, err := u.FileSystem.ReadFile(workspaceTargetPath)
+			if err != nil {
+				return fmt.Errorf("read workspace target: %w", err)
+			}
+			hash := sha256Hex(data)
+			if lease.PlaintextHash == "" && !u.Discard {
+				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("workspace target has no recorded plaintext hash; rerun with --discard to remove it"))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrappedErr
+			}
+			modified := hasLease && lease.PlaintextHash != "" && hash != lease.PlaintextHash
+			if modified && !u.Commit && !u.Discard {
+				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("workspace target has uncommitted changes; rerun with --commit or --discard"))
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrappedErr
+			}
+			if u.Commit {
+				document, ok, err := config.DocumentForTarget(entry.id, target)
+				if err == nil && !ok {
+					err = fmt.Errorf("1Password document is not registered: %s", target)
+				}
+				if err != nil {
+					return err
+				}
+				updatedDocument, changed, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, data)
+				if err != nil {
+					return fmt.Errorf("%s: %w", target, err)
+				}
+				if err := config.UpsertDocument(updatedDocument); err != nil {
+					return err
+				}
+				if changed || updatedDocument.ContentSHA256 != document.ContentSHA256 {
+					configChanged = true
+				}
+				if err := updateLeaseHash(&state, entry.id, target, workspaceTargetPath, updatedDocument.ItemID, updatedDocument.ContentSHA256, now, ttl); err != nil {
+					return err
+				}
+			}
+			if err := removeMaterializedTarget(u.FileSystem, workspaceTargetPath); err != nil {
+				return fmt.Errorf("%s: %w", target, err)
+			}
+			if err := state.RemoveLease(entry.id, target); err != nil {
+				return err
+			}
+			outputLayout.writeTarget(u.Stdout, entry.id, target, "vanished")
+		}
+	}
+
+	if err := persistState(u.FileSystem, statePath, state); err != nil {
+		return err
+	}
+	if configChanged {
+		configPath, _, err := loadConfig(u.FileSystem)
+		if err != nil {
+			return err
+		}
+		configData, err := config.RenderTOML()
+		if err != nil {
+			return err
+		}
+		if err := u.FileSystem.WriteFile(configPath, configData, 0o644); err != nil {
+			return fmt.Errorf("write config file: %w", err)
+		}
+	}
+	if vanishErr != nil {
+		return vanishErr
+	}
 	return nil
 }
 

@@ -140,6 +140,25 @@ func TestConfigRemoveWorkspaceReturnsErrorWhenWorkspaceIsMissing(t *testing.T) {
 	}
 }
 
+func TestConfigRemoveWorkspaceDocumentsRemovesMatchingDocuments(t *testing.T) {
+	config := DefaultConfig()
+	config.Documents = []DocumentConfig{
+		{WorkspaceID: "myapp", Target: ".env", ItemID: "item-1"},
+		{WorkspaceID: "other", Target: ".env", ItemID: "item-2"},
+	}
+
+	if err := config.RemoveWorkspaceDocuments("myapp"); err != nil {
+		t.Fatalf("RemoveWorkspaceDocuments() returned error: %v", err)
+	}
+
+	if got := len(config.Documents); got != 1 {
+		t.Fatalf("document count = %d, want 1", got)
+	}
+	if got := config.Documents[0].WorkspaceID; got != "other" {
+		t.Fatalf("remaining workspace = %q, want other", got)
+	}
+}
+
 func TestConfigResolveWorkspaceByDirUsesDeepestRoot(t *testing.T) {
 	config := DefaultConfig()
 	config.Workspaces["root"] = Workspace{Root: "/tmp/app"}

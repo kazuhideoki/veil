@@ -28,12 +28,13 @@ type addFileSystem interface {
 }
 
 type AddTarget struct {
-	FileSystem     addFileSystem
-	TrackedChecker trackedChecker
-	StoreRuntime   EncryptedStoreRuntime
-	Stdout         io.Writer
-	TargetPath     string
-	Now            func() time.Time
+	FileSystem      addFileSystem
+	TrackedChecker  trackedChecker
+	StoreRuntime    EncryptedStoreRuntime
+	DocumentRuntime OnePasswordDocumentRuntime
+	Stdout          io.Writer
+	TargetPath      string
+	Now             func() time.Time
 }
 
 type addCandidate struct {
@@ -89,6 +90,10 @@ func (u AddTarget) Run() error {
 		return err
 	}
 
+	if config.IsOnePasswordStore() {
+		return u.addOnePasswordDocuments(configPath, config, workspaceID, workspace, targetPaths, skippedDirs)
+	}
+
 	candidates, updatedWorkspace, err := u.collectAddCandidates(config, workspaceID, workspace, targetPaths)
 	if err != nil {
 		return err
@@ -130,6 +135,100 @@ func (u AddTarget) Run() error {
 		fmt.Fprintf(u.Stdout, "skipped nested directory: %s\n", skippedDir)
 	}
 
+	for _, candidate := range candidates {
+		fmt.Fprintf(u.Stdout, "added target: %s\n", candidate.targetPath)
+	}
+	return nil
+}
+
+func (u AddTarget) addOnePasswordDocuments(configPath string, config domain.Config, workspaceID string, workspace domain.Workspace, targetPaths, skippedDirs []string) error {
+	if err := requireOnePasswordRuntime(u.DocumentRuntime); err != nil {
+		return err
+	}
+
+	updatedWorkspace := workspace
+	candidates := make([]addCandidate, 0, len(targetPaths))
+	for _, targetPath := range targetPaths {
+		if err := updatedWorkspace.AddTarget(targetPath); err != nil {
+			return err
+		}
+		if _, exists, err := config.DocumentForTarget(workspaceID, targetPath); err != nil {
+			return err
+		} else if exists {
+			return fmt.Errorf("1Password document target already exists: %s", targetPath)
+		}
+
+		workspaceTargetPath := filepath.Join(workspace.Root, targetPath)
+		targetInfo, err := u.FileSystem.Stat(workspaceTargetPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("target file does not exist: %s", targetPath)
+			}
+			return fmt.Errorf("stat target file: %w", err)
+		}
+		if !targetInfo.Mode().IsRegular() {
+			return fmt.Errorf("target must be a regular file: %s", targetPath)
+		}
+		isTracked, err := u.TrackedChecker.IsTracked(workspace.Root, targetPath)
+		if err != nil {
+			return fmt.Errorf("check git tracking: %w", err)
+		}
+		if isTracked {
+			return fmt.Errorf("target is tracked by git: %s", targetPath)
+		}
+		targetData, err := u.FileSystem.ReadFile(workspaceTargetPath)
+		if err != nil {
+			return fmt.Errorf("read target file: %w", err)
+		}
+		candidates = append(candidates, addCandidate{
+			targetPath:          targetPath,
+			workspaceTargetPath: workspaceTargetPath,
+			storeMode:           targetInfo.Mode().Perm(),
+			storeData:           targetData,
+		})
+	}
+
+	vault := onePasswordVault(config, domain.DocumentConfig{})
+	createdDocuments := make([]domain.DocumentConfig, 0, len(candidates))
+	for _, candidate := range candidates {
+		title := onePasswordTitle(workspaceID, candidate.targetPath)
+		itemID, err := u.DocumentRuntime.CreateDocument(vault, title, onePasswordTags(workspaceID), candidate.storeData)
+		if err != nil {
+			return fmt.Errorf("create 1Password document: %w", err)
+		}
+		createdDocuments = append(createdDocuments, domain.DocumentConfig{
+			WorkspaceID:   workspaceID,
+			Target:        candidate.targetPath,
+			ItemID:        itemID,
+			Vault:         vault,
+			Title:         title,
+			ContentSHA256: sha256Hex(candidate.storeData),
+		})
+	}
+
+	config.Workspaces[workspaceID] = updatedWorkspace
+	for _, document := range createdDocuments {
+		if err := config.UpsertDocument(document); err != nil {
+			return err
+		}
+	}
+
+	configData, err := config.RenderTOML()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(u.Stdout, "writing config: %s\n", configPath)
+	if err := u.FileSystem.WriteFile(configPath, configData, 0o644); err != nil {
+		return fmt.Errorf("write config file: %w", err)
+	}
+
+	if err := removeWorkspaceTargets(u.FileSystem, candidates); err != nil {
+		return err
+	}
+
+	for _, skippedDir := range skippedDirs {
+		fmt.Fprintf(u.Stdout, "skipped nested directory: %s\n", skippedDir)
+	}
 	for _, candidate := range candidates {
 		fmt.Fprintf(u.Stdout, "added target: %s\n", candidate.targetPath)
 	}

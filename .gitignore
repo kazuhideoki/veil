@@ -4,3 +4,4 @@ plan*
 .gocache
 .DS_Store
 veil
+.tmp

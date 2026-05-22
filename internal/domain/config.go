@@ -14,6 +14,7 @@ const (
 	DefaultStorePath       = "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore"
 	DefaultStoreBackend    = "plain"
 	EncryptedVolumeBackend = "encrypted_volume"
+	OnePasswordBackend     = "1password_document"
 	DefaultStoreID         = "default"
 	DefaultTTL             = "24h"
 )
@@ -25,6 +26,7 @@ type Config struct {
 	Store       StoreConfig          `toml:"store"`
 	KeyProvider KeyProviderConfig    `toml:"key_provider"`
 	Session     SessionConfig        `toml:"session"`
+	Documents   []DocumentConfig     `toml:"documents,omitempty"`
 	Workspaces  map[string]Workspace `toml:"workspaces"`
 }
 
@@ -39,6 +41,7 @@ type StoreConfig struct {
 	BundlePath string `toml:"bundle_path,omitempty"`
 	MountPath  string `toml:"mount_path,omitempty"`
 	VolumeName string `toml:"volume_name,omitempty"`
+	Vault      string `toml:"vault,omitempty"`
 }
 
 type KeyProviderConfig struct {
@@ -49,6 +52,15 @@ type KeyProviderConfig struct {
 type SessionConfig struct {
 	Directory  string `toml:"directory,omitempty"`
 	StaleAfter string `toml:"stale_after,omitempty"`
+}
+
+type DocumentConfig struct {
+	WorkspaceID   string `toml:"workspace_id"`
+	Target        string `toml:"target"`
+	ItemID        string `toml:"item_id"`
+	Vault         string `toml:"vault,omitempty"`
+	Title         string `toml:"title,omitempty"`
+	ContentSHA256 string `toml:"content_sha256,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -110,9 +122,39 @@ func (c Config) RenderTOML() ([]byte, error) {
 				fmt.Fprintf(&builder, "stale_after = %s\n", strconv.Quote(c.Session.StaleAfter))
 			}
 		}
+	} else if c.Store.Backend == OnePasswordBackend {
+		fmt.Fprintf(&builder, "default_ttl = %s\n", strconv.Quote(c.DefaultTTL))
+		builder.WriteString("\n[store]\n")
+		fmt.Fprintf(&builder, "backend = %s\n", strconv.Quote(c.Store.Backend))
+		if c.Store.Vault != "" {
+			fmt.Fprintf(&builder, "vault = %s\n", strconv.Quote(c.Store.Vault))
+		}
 	} else {
 		fmt.Fprintf(&builder, "store_path = %s\n", strconv.Quote(c.StorePath))
 		fmt.Fprintf(&builder, "default_ttl = %s\n", strconv.Quote(c.DefaultTTL))
+	}
+
+	documents := append([]DocumentConfig(nil), c.Documents...)
+	sort.Slice(documents, func(i, j int) bool {
+		if documents[i].WorkspaceID != documents[j].WorkspaceID {
+			return documents[i].WorkspaceID < documents[j].WorkspaceID
+		}
+		return documents[i].Target < documents[j].Target
+	})
+	for _, document := range documents {
+		builder.WriteString("\n[[documents]]\n")
+		fmt.Fprintf(&builder, "workspace_id = %s\n", strconv.Quote(document.WorkspaceID))
+		fmt.Fprintf(&builder, "target = %s\n", strconv.Quote(document.Target))
+		fmt.Fprintf(&builder, "item_id = %s\n", strconv.Quote(document.ItemID))
+		if document.Vault != "" {
+			fmt.Fprintf(&builder, "vault = %s\n", strconv.Quote(document.Vault))
+		}
+		if document.Title != "" {
+			fmt.Fprintf(&builder, "title = %s\n", strconv.Quote(document.Title))
+		}
+		if document.ContentSHA256 != "" {
+			fmt.Fprintf(&builder, "content_sha256 = %s\n", strconv.Quote(document.ContentSHA256))
+		}
 	}
 
 	ids := make([]string, 0, len(c.Workspaces))
@@ -187,7 +229,7 @@ func (c *Config) applyDefaults() {
 	if c.DefaultTTL == "" {
 		c.DefaultTTL = DefaultTTL
 	}
-	if c.Store.Backend == EncryptedVolumeBackend && c.Version < 2 {
+	if (c.Store.Backend == EncryptedVolumeBackend || c.Store.Backend == OnePasswordBackend) && c.Version < 2 {
 		c.Version = 2
 	}
 	if c.Session.StaleAfter == "" {
@@ -204,6 +246,48 @@ func (c Config) EffectiveStorePath() string {
 
 func (c Config) IsEncryptedVolumeStore() bool {
 	return c.Store.Backend == EncryptedVolumeBackend
+}
+
+func (c Config) IsOnePasswordStore() bool {
+	return c.Store.Backend == OnePasswordBackend
+}
+
+func (c Config) DocumentForTarget(workspaceID, target string) (DocumentConfig, bool, error) {
+	if err := validateWorkspaceID(workspaceID); err != nil {
+		return DocumentConfig{}, false, err
+	}
+	normalizedTarget, err := normalizeTargetPath(target)
+	if err != nil {
+		return DocumentConfig{}, false, err
+	}
+	for _, document := range c.Documents {
+		if document.WorkspaceID == workspaceID && document.Target == normalizedTarget {
+			return document, true, nil
+		}
+	}
+	return DocumentConfig{}, false, nil
+}
+
+func (c *Config) UpsertDocument(document DocumentConfig) error {
+	if err := validateWorkspaceID(document.WorkspaceID); err != nil {
+		return err
+	}
+	normalizedTarget, err := normalizeTargetPath(document.Target)
+	if err != nil {
+		return err
+	}
+	document.Target = normalizedTarget
+	if document.ItemID == "" {
+		return fmt.Errorf("document item_id must not be empty")
+	}
+	for idx, existing := range c.Documents {
+		if existing.WorkspaceID == document.WorkspaceID && existing.Target == document.Target {
+			c.Documents[idx] = document
+			return nil
+		}
+	}
+	c.Documents = append(c.Documents, document)
+	return nil
 }
 
 func validateWorkspaceID(id string) error {
@@ -314,6 +398,22 @@ func (c *Config) RemoveWorkspace(id string) error {
 	}
 
 	delete(c.Workspaces, id)
+	return nil
+}
+
+func (c *Config) RemoveWorkspaceDocuments(workspaceID string) error {
+	if err := validateWorkspaceID(workspaceID); err != nil {
+		return err
+	}
+
+	filtered := c.Documents[:0]
+	for _, document := range c.Documents {
+		if document.WorkspaceID == workspaceID {
+			continue
+		}
+		filtered = append(filtered, document)
+	}
+	c.Documents = filtered
 	return nil
 }
 

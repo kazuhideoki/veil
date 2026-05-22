@@ -25,6 +25,7 @@ type Lease struct {
 	StoreID       string    `toml:"store_id,omitempty"`
 	WorkspacePath string    `toml:"workspace_path,omitempty"`
 	StorePath     string    `toml:"store_path,omitempty"`
+	PlaintextHash string    `toml:"plaintext_sha256,omitempty"`
 }
 
 func DefaultState() State {
@@ -78,6 +79,9 @@ func (s State) RenderTOML() ([]byte, error) {
 		if lease.StorePath != "" {
 			fmt.Fprintf(&builder, "store_path = %s\n", strconv.Quote(lease.StorePath))
 		}
+		if lease.PlaintextHash != "" {
+			fmt.Fprintf(&builder, "plaintext_sha256 = %s\n", strconv.Quote(lease.PlaintextHash))
+		}
 	}
 
 	return []byte(builder.String()), nil
@@ -88,6 +92,10 @@ func (s *State) UpsertLease(workspaceID, target string, mountedAt, expiresAt tim
 }
 
 func (s *State) UpsertLeaseForStore(workspaceID, target string, mountedAt, expiresAt time.Time, storeID, workspacePath, storePath string) error {
+	return s.UpsertLeaseWithHash(workspaceID, target, mountedAt, expiresAt, storeID, workspacePath, storePath, "")
+}
+
+func (s *State) UpsertLeaseWithHash(workspaceID, target string, mountedAt, expiresAt time.Time, storeID, workspacePath, storePath, plaintextHash string) error {
 	if err := validateWorkspaceID(workspaceID); err != nil {
 		return err
 	}
@@ -112,6 +120,7 @@ func (s *State) UpsertLeaseForStore(workspaceID, target string, mountedAt, expir
 		StoreID:       storeID,
 		WorkspacePath: workspacePath,
 		StorePath:     storePath,
+		PlaintextHash: plaintextHash,
 	}
 
 	for idx, existing := range s.Leases {

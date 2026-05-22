@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kazuhideoki/veil/internal/domain"
 	"github.com/kazuhideoki/veil/internal/infra"
 )
 
@@ -113,6 +115,170 @@ func TestRemoveWorkspaceRestoresTargetsAndDeletesWorkspaceConfig(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
 		}
+	}
+}
+
+func TestRemoveWorkspaceByIDDeletesMissingWorkspaceConfigAndDocuments(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	configPath := filepath.Join(tempHome, ".veil", "config.toml")
+	writeConfigForTest(t, configPath, "version = 2\ndefault_ttl = \"24h\"\n\n[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n\n[[documents]]\nworkspace_id = \"dev-flow\"\ntarget = \"assets/.env\"\nitem_id = \"item-1\"\n\n[[documents]]\nworkspace_id = \"dotfiles\"\ntarget = \"scripts/repository_map/.env\"\nitem_id = \"item-2\"\n\n[workspaces.\"dev-flow\"]\nroot = \"/missing/dev-flow\"\ntargets = [\"assets/.env\"]\n\n[workspaces.dotfiles]\nroot = \"/tmp/dotfiles\"\ntargets = [\"scripts/repository_map/.env\"]\n")
+
+	var stdout bytes.Buffer
+	uc := RemoveWorkspace{
+		FileSystem:  infra.OSFileSystem{},
+		Stdout:      &stdout,
+		WorkspaceID: "dev-flow",
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	for _, unwanted := range []string{"dev-flow", "item-1", "assets/.env"} {
+		if strings.Contains(string(configData), unwanted) {
+			t.Fatalf("config contents = %q, unwanted %q", string(configData), unwanted)
+		}
+	}
+	for _, want := range []string{"dotfiles", "item-2"} {
+		if !strings.Contains(string(configData), want) {
+			t.Fatalf("config contents = %q, want %q", string(configData), want)
+		}
+	}
+	if !strings.Contains(stdout.String(), "removed workspace: dev-flow") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRemoveWorkspaceByIDRejectsExistingWorkspaceRoot(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := filepath.Join(tempHome, "dev-flow")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+
+	configPath := filepath.Join(tempHome, ".veil", "config.toml")
+	writeConfigForTest(t, configPath, "version = 2\ndefault_ttl = \"24h\"\n\n[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n\n[[documents]]\nworkspace_id = \"dev-flow\"\ntarget = \"assets/.env\"\nitem_id = \"item-1\"\n\n[workspaces.\"dev-flow\"]\nroot = "+workspaceRootQuoted(resolvedWorkspaceRoot)+"\ntargets = [\"assets/.env\"]\n")
+
+	uc := RemoveWorkspace{
+		FileSystem:  infra.OSFileSystem{},
+		Stdout:      &bytes.Buffer{},
+		WorkspaceID: "dev-flow",
+	}
+
+	err = uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "workspace root exists") {
+		t.Fatalf("error = %q", err)
+	}
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	if !strings.Contains(string(configData), "dev-flow") || !strings.Contains(string(configData), "item-1") {
+		t.Fatalf("config contents = %q", string(configData))
+	}
+}
+
+func TestRemoveWorkspaceForOnePasswordStoreRequiresVanishedTargets(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	configPath := filepath.Join(tempHome, ".veil", "config.toml")
+	writeConfigForTest(t, configPath, "version = 2\ndefault_ttl = \"24h\"\n\n[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n\n[[documents]]\nworkspace_id = \"myapp\"\ntarget = \".env\"\nitem_id = \"item-1\"\n\n[workspaces.myapp]\nroot = "+workspaceRootQuoted(resolvedWorkspaceRoot)+"\ntargets = [\".env\"]\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	uc := RemoveWorkspace{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &bytes.Buffer{},
+	}
+
+	err = uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "run veil vanish before workspace remove") {
+		t.Fatalf("error = %q", err)
+	}
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	if !strings.Contains(string(configData), "[workspaces.myapp]") || !strings.Contains(string(configData), "item-1") {
+		t.Fatalf("config contents = %q", string(configData))
+	}
+}
+
+func TestRemoveWorkspaceForOnePasswordStoreAfterVanishDeletesConfigAndLeases(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := filepath.Join(tempHome, "myapp")
+	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	resolvedWorkspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	configPath := filepath.Join(tempHome, ".veil", "config.toml")
+	writeConfigForTest(t, configPath, "version = 2\ndefault_ttl = \"24h\"\n\n[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n\n[[documents]]\nworkspace_id = \"myapp\"\ntarget = \".env\"\nitem_id = \"item-1\"\n\n[workspaces.myapp]\nroot = "+workspaceRootQuoted(resolvedWorkspaceRoot)+"\ntargets = [\".env\"]\n")
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, filepath.Join(workspaceRoot, ".env"), "item-1", sha256Hex([]byte("TOKEN=secret\n"))); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	var stdout bytes.Buffer
+	uc := RemoveWorkspace{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &stdout,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	if strings.Contains(string(configData), "myapp") || strings.Contains(string(configData), "item-1") {
+		t.Fatalf("config contents = %q", string(configData))
+	}
+	stateData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "state.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(state) returned error: %v", err)
+	}
+	if strings.Contains(string(stateData), "myapp") {
+		t.Fatalf("state contents = %q", string(stateData))
+	}
+	if !strings.Contains(stdout.String(), "removed workspace: myapp") {
+		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
 

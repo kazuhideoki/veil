@@ -10,12 +10,13 @@ Commands:
   init      Initialize config and add the current workspace
   add       Move a target file, or a directory's direct files, into Veil store and register them
   edit      Open a registered store file with $EDITOR
+  update    Commit a materialized 1Password document target back to 1Password
   remove    Stop managing a target and restore it into the workspace
   purge     Delete a registered target from Veil store and config
   workspace Remove or purge the active workspace registration
-  emerge    Create workspace symlinks for registered targets (--all, --force)
+  emerge    Create workspace symlinks or materialized files for registered targets (--all, --force)
   status    Show current target states for the active workspace
-  vanish    Remove Veil-managed workspace symlinks for registered targets (--all for every workspace)
+  vanish    Remove Veil-managed workspace targets (--all, --commit, --discard)
 
 Options:
   --help    Show this help message

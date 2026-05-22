@@ -68,11 +68,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.AddTarget{
-			FileSystem:     infra.OSFileSystem{},
-			TrackedChecker: infra.GitCLI{},
-			StoreRuntime:   infra.EncryptedVolumeRuntime{},
-			Stdout:         stdout,
-			TargetPath:     addFlags.Arg(0),
+			FileSystem:      infra.OSFileSystem{},
+			TrackedChecker:  infra.GitCLI{},
+			StoreRuntime:    infra.EncryptedVolumeRuntime{},
+			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+			Stdout:          stdout,
+			TargetPath:      addFlags.Arg(0),
 		}
 
 		return runner.Run()
@@ -89,11 +90,32 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.EditTarget{
-			FileSystem:   infra.OSFileSystem{},
-			StoreRuntime: infra.EncryptedVolumeRuntime{},
-			EditorRunner: infra.ExecEditorRunner{},
-			EditorPath:   os.Getenv("EDITOR"),
-			TargetPath:   editFlags.Arg(0),
+			FileSystem:      infra.OSFileSystem{},
+			StoreRuntime:    infra.EncryptedVolumeRuntime{},
+			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+			EditorRunner:    infra.ExecEditorRunner{},
+			EditorPath:      os.Getenv("EDITOR"),
+			TargetPath:      editFlags.Arg(0),
+		}
+
+		return runner.Run()
+	case "update":
+		updateFlags := flag.NewFlagSet("update", flag.ContinueOnError)
+		updateFlags.SetOutput(stderr)
+
+		if err := updateFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if updateFlags.NArg() != 1 {
+			return fmt.Errorf("update requires exactly one target path")
+		}
+
+		runner := usecase.UpdateTarget{
+			FileSystem:      infra.OSFileSystem{},
+			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+			Stdout:          stdout,
+			TargetPath:      updateFlags.Arg(0),
 		}
 
 		return runner.Run()
@@ -145,6 +167,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 			workspaceRemoveFlags := flag.NewFlagSet("workspace remove", flag.ContinueOnError)
 			workspaceRemoveFlags.SetOutput(stderr)
 
+			var workspaceID string
+			workspaceRemoveFlags.StringVar(&workspaceID, "workspace-id", "", "registered workspace id to remove")
+
 			if err := workspaceRemoveFlags.Parse(args[2:]); err != nil {
 				return err
 			}
@@ -154,8 +179,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 
 			runner := usecase.RemoveWorkspace{
-				FileSystem: infra.OSFileSystem{},
-				Stdout:     stdout,
+				FileSystem:  infra.OSFileSystem{},
+				Stdout:      stdout,
+				WorkspaceID: workspaceID,
 			}
 
 			return runner.Run()
@@ -215,11 +241,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.EmergeTargets{
-			FileSystem:    infra.OSFileSystem{},
-			StoreRuntime:  infra.EncryptedVolumeRuntime{},
-			Stdout:        stdout,
-			AllWorkspaces: allWorkspaces,
-			Force:         force,
+			FileSystem:      infra.OSFileSystem{},
+			StoreRuntime:    infra.EncryptedVolumeRuntime{},
+			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+			Stdout:          stdout,
+			AllWorkspaces:   allWorkspaces,
+			Force:           force,
 		}
 
 		return runner.Run()
@@ -228,7 +255,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		vanishFlags.SetOutput(stderr)
 
 		var allWorkspaces bool
+		var commit bool
+		var discard bool
 		vanishFlags.BoolVar(&allWorkspaces, "all", false, "vanish registered targets for all workspaces")
+		vanishFlags.BoolVar(&commit, "commit", false, "commit modified 1Password document targets before vanishing")
+		vanishFlags.BoolVar(&discard, "discard", false, "discard modified 1Password document targets while vanishing")
 
 		if err := vanishFlags.Parse(args[1:]); err != nil {
 			return err
@@ -239,10 +270,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.VanishTargets{
-			FileSystem:    infra.OSFileSystem{},
-			StoreRuntime:  infra.EncryptedVolumeRuntime{},
-			Stdout:        stdout,
-			AllWorkspaces: allWorkspaces,
+			FileSystem:      infra.OSFileSystem{},
+			StoreRuntime:    infra.EncryptedVolumeRuntime{},
+			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+			Stdout:          stdout,
+			AllWorkspaces:   allWorkspaces,
+			Commit:          commit,
+			Discard:         discard,
 		}
 
 		return runner.Run()
