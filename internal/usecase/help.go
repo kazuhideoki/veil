@@ -8,13 +8,13 @@ Usage:
 
 Commands:
   init      Initialize config and add the current workspace
-  add       Move a target file, or a directory's direct files, into Veil store and register them
-  edit      Open a registered store file with $EDITOR
+  add       Move a target file, or a directory's direct files, into 1Password and register them
+  edit      Open a registered 1Password document with $EDITOR
   update    Commit a materialized 1Password document target back to 1Password
   remove    Stop managing a target and restore it into the workspace
-  purge     Delete a registered target from Veil store and config
+  purge     Delete a registered target from Veil config
   workspace Remove or purge the active workspace registration
-  emerge    Create workspace symlinks or materialized files for registered targets (--all, --force)
+  emerge    Materialize registered 1Password document targets into the workspace (--all)
   status    Show target states for all registered workspaces
   vanish    Remove Veil-managed workspace targets (--all, --commit, --discard)
 

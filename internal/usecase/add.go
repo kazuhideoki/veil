@@ -30,7 +30,6 @@ type addFileSystem interface {
 type AddTarget struct {
 	FileSystem      addFileSystem
 	TrackedChecker  trackedChecker
-	StoreRuntime    EncryptedStoreRuntime
 	DocumentRuntime OnePasswordDocumentRuntime
 	Stdout          io.Writer
 	TargetPath      string
@@ -68,17 +67,9 @@ func (u AddTarget) Run() error {
 
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
-	now := currentTime(u.Now)
-	if err := ensureStoreAvailable(u.StoreRuntime, config, now, u.Stdout, false, false); err != nil {
+	if err := requireOnePasswordConfig(config); err != nil {
 		return err
 	}
-	defer func() {
-		_, state, err := loadState(u.FileSystem)
-		if err != nil {
-			return
-		}
-		_ = unmountStoreIfIdle(u.StoreRuntime, config, state, now, u.Stdout)
-	}()
 
 	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
 	if err != nil {
@@ -90,55 +81,7 @@ func (u AddTarget) Run() error {
 		return err
 	}
 
-	if config.IsOnePasswordStore() {
-		return u.addOnePasswordDocuments(configPath, config, workspaceID, workspace, targetPaths, skippedDirs)
-	}
-
-	candidates, updatedWorkspace, err := u.collectAddCandidates(config, workspaceID, workspace, targetPaths)
-	if err != nil {
-		return err
-	}
-	config.Workspaces[workspaceID] = updatedWorkspace
-
-	writtenStorePaths := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		if err := u.FileSystem.MkdirAll(filepath.Dir(candidate.storeTargetPath), 0o755); err != nil {
-			rollbackAddedStoreTargets(u.FileSystem, writtenStorePaths)
-			return fmt.Errorf("create store target directory: %w", err)
-		}
-
-		if err := u.FileSystem.WriteFile(candidate.storeTargetPath, candidate.storeData, candidate.storeMode); err != nil {
-			rollbackAddedStoreTargets(u.FileSystem, writtenStorePaths)
-			return fmt.Errorf("write store target: %w", err)
-		}
-
-		writtenStorePaths = append(writtenStorePaths, candidate.storeTargetPath)
-	}
-
-	configData, err := config.RenderTOML()
-	if err != nil {
-		rollbackAddedStoreTargets(u.FileSystem, writtenStorePaths)
-		return err
-	}
-
-	fmt.Fprintf(u.Stdout, "writing config: %s\n", configPath)
-	if err := u.FileSystem.WriteFile(configPath, configData, 0o644); err != nil {
-		rollbackAddedStoreTargets(u.FileSystem, writtenStorePaths)
-		return fmt.Errorf("write config file: %w", err)
-	}
-
-	if err := removeWorkspaceTargets(u.FileSystem, candidates); err != nil {
-		return err
-	}
-
-	for _, skippedDir := range skippedDirs {
-		fmt.Fprintf(u.Stdout, "skipped nested directory: %s\n", skippedDir)
-	}
-
-	for _, candidate := range candidates {
-		fmt.Fprintf(u.Stdout, "added target: %s\n", candidate.targetPath)
-	}
-	return nil
+	return u.addOnePasswordDocuments(configPath, config, workspaceID, workspace, targetPaths, skippedDirs)
 }
 
 func (u AddTarget) addOnePasswordDocuments(configPath string, config domain.Config, workspaceID string, workspace domain.Workspace, targetPaths, skippedDirs []string) error {
@@ -291,72 +234,6 @@ func (u AddTarget) resolveTargetPaths(workspaceRoot string) ([]string, []string,
 	}
 
 	return targetPaths, skippedDirs, nil
-}
-
-func (u AddTarget) collectAddCandidates(config domain.Config, workspaceID string, workspace domain.Workspace, targetPaths []string) ([]addCandidate, domain.Workspace, error) {
-	updatedWorkspace := workspace
-	candidates := make([]addCandidate, 0, len(targetPaths))
-
-	// Validate the full batch before mutating the store so directory adds stay all-or-nothing.
-	for _, targetPath := range targetPaths {
-		if err := updatedWorkspace.AddTarget(targetPath); err != nil {
-			return nil, workspace, err
-		}
-
-		workspaceTargetPath := filepath.Join(workspace.Root, targetPath)
-		targetInfo, err := u.FileSystem.Stat(workspaceTargetPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil, workspace, fmt.Errorf("target file does not exist: %s", targetPath)
-			}
-			return nil, workspace, fmt.Errorf("stat target file: %w", err)
-		}
-
-		if !targetInfo.Mode().IsRegular() {
-			return nil, workspace, fmt.Errorf("target must be a regular file: %s", targetPath)
-		}
-
-		isTracked, err := u.TrackedChecker.IsTracked(workspace.Root, targetPath)
-		if err != nil {
-			return nil, workspace, fmt.Errorf("check git tracking: %w", err)
-		}
-
-		if isTracked {
-			return nil, workspace, fmt.Errorf("target is tracked by git: %s", targetPath)
-		}
-
-		storeTargetPath, err := config.StoreTargetPath(workspaceID, targetPath)
-		if err != nil {
-			return nil, workspace, err
-		}
-
-		if _, err := u.FileSystem.Stat(storeTargetPath); err == nil {
-			return nil, workspace, fmt.Errorf("store target already exists: %s", targetPath)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, workspace, fmt.Errorf("stat store target: %w", err)
-		}
-
-		targetData, err := u.FileSystem.ReadFile(workspaceTargetPath)
-		if err != nil {
-			return nil, workspace, fmt.Errorf("read target file: %w", err)
-		}
-
-		candidates = append(candidates, addCandidate{
-			targetPath:          targetPath,
-			workspaceTargetPath: workspaceTargetPath,
-			storeTargetPath:     storeTargetPath,
-			storeMode:           targetInfo.Mode().Perm(),
-			storeData:           targetData,
-		})
-	}
-
-	return candidates, updatedWorkspace, nil
-}
-
-func rollbackAddedStoreTargets(fs addFileSystem, storeTargetPaths []string) {
-	for i := len(storeTargetPaths) - 1; i >= 0; i-- {
-		_ = fs.Remove(storeTargetPaths[i])
-	}
 }
 
 func removeWorkspaceTargets(fs addFileSystem, candidates []addCandidate) error {

@@ -60,6 +60,13 @@ func requireOnePasswordRuntime(runtime OnePasswordDocumentRuntime) error {
 	return nil
 }
 
+func requireOnePasswordConfig(config domain.Config) error {
+	if !config.IsOnePasswordStore() {
+		return fmt.Errorf("unsupported store backend %q; only %q is supported", config.Store.Backend, domain.OnePasswordBackend)
+	}
+	return nil
+}
+
 func authenticateOnePasswordRuntime(runtime OnePasswordDocumentRuntime) error {
 	authenticator, ok := runtime.(onePasswordDocumentAuthenticator)
 	if !ok {

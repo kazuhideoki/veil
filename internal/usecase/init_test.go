@@ -77,9 +77,6 @@ func TestInitConfigCreatesConfigFile(t *testing.T) {
 	if config.Version != 2 {
 		t.Fatalf("config version = %d, want 2", config.Version)
 	}
-	if config.StorePath != "" {
-		t.Fatalf("store path = %q, want empty", config.StorePath)
-	}
 	if len(workspace.Targets) != 0 {
 		t.Fatalf("workspace targets = %#v, want empty", workspace.Targets)
 	}
@@ -119,7 +116,7 @@ func TestInitConfigAddsWorkspaceToExistingConfig(t *testing.T) {
 	}
 
 	configPath := filepath.Join(configDir, "config.toml")
-	const existing = "version = 1\nstore_path = \"~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore\"\ndefault_ttl = \"24h\"\n\n[workspaces.myapp]\nroot = \"/tmp/myapp\"\ntargets = [\".env\"]\n"
+	const existing = "version = 2\ndefault_ttl = \"24h\"\n\n[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n\n[workspaces.myapp]\nroot = \"/tmp/myapp\"\ntargets = [\".env\"]\n"
 	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
 		t.Fatalf("WriteFile() returned error: %v", err)
 	}
@@ -210,7 +207,7 @@ func TestInitConfigRejectsDuplicateWorkspaceID(t *testing.T) {
 	}
 
 	configPath := filepath.Join(configDir, "config.toml")
-	const existing = "version = 1\nstore_path = \"~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore\"\ndefault_ttl = \"24h\"\n\n[workspaces.workspace-root]\nroot = \"/tmp/other-root\"\ntargets = []\n"
+	const existing = "version = 2\ndefault_ttl = \"24h\"\n\n[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n\n[workspaces.workspace-root]\nroot = \"/tmp/other-root\"\ntargets = []\n"
 	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
 		t.Fatalf("WriteFile() returned error: %v", err)
 	}
@@ -259,7 +256,7 @@ func TestInitConfigSupportsCommentedConfig(t *testing.T) {
 	}
 
 	configPath := filepath.Join(configDir, "config.toml")
-	const existing = "# note\nversion = 1\nstore_path = \"~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore\"\ndefault_ttl = \"24h\" # keep one day\n\n[workspaces.existing]\nroot = \"/tmp/existing\"\ntargets = []\n"
+	const existing = "# note\nversion = 2\ndefault_ttl = \"24h\" # keep one day\n\n[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n\n[workspaces.existing]\nroot = \"/tmp/existing\"\ntargets = []\n"
 	if err := os.WriteFile(configPath, []byte(existing), 0o644); err != nil {
 		t.Fatalf("WriteFile() returned error: %v", err)
 	}

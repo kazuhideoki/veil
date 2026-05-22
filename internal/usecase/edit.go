@@ -2,7 +2,6 @@ package usecase
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +30,6 @@ type editorRunner interface {
 
 type EditTarget struct {
 	FileSystem      editFileSystem
-	StoreRuntime    EncryptedStoreRuntime
 	DocumentRuntime OnePasswordDocumentRuntime
 	EditorRunner    editorRunner
 	EditorPath      string
@@ -40,24 +38,9 @@ type EditTarget struct {
 }
 
 func (u EditTarget) Run() error {
-	editorPath, editorArgs, err := parseEditorCommand(u.EditorPath)
-	if err != nil {
-		return err
-	}
-
 	_, config, err := loadConfig(u.FileSystem)
 	if err != nil {
 		return err
-	}
-
-	currentDir, err := u.FileSystem.Getwd()
-	if err != nil {
-		return fmt.Errorf("resolve current directory: %w", err)
-	}
-
-	currentDir, err = u.FileSystem.EvalSymlinks(currentDir)
-	if err != nil {
-		return fmt.Errorf("canonicalize current directory: %w", err)
 	}
 
 	homeDir, err := u.FileSystem.UserHomeDir()
@@ -67,57 +50,10 @@ func (u EditTarget) Run() error {
 
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
-	if config.IsOnePasswordStore() {
-		return u.editOnePasswordDocument(config)
-	}
-	now := currentTime(u.Now)
-	if err := ensureStoreAvailable(u.StoreRuntime, config, now, io.Discard, false, false); err != nil {
+	if err := requireOnePasswordConfig(config); err != nil {
 		return err
 	}
-	defer func() {
-		_, state, err := loadState(u.FileSystem)
-		if err != nil {
-			return
-		}
-		_ = unmountStoreIfIdle(u.StoreRuntime, config, state, now, io.Discard)
-	}()
-
-	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
-	if err != nil {
-		return err
-	}
-
-	targetPath, err := normalizeEditTargetPath(u.TargetPath)
-	if err != nil {
-		return err
-	}
-
-	if !hasTarget(workspace.Targets, targetPath) {
-		return fmt.Errorf("target is not registered: %s", targetPath)
-	}
-
-	storeTargetPath, err := config.StoreTargetPath(workspaceID, targetPath)
-	if err != nil {
-		return err
-	}
-
-	targetInfo, err := u.FileSystem.Stat(storeTargetPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("store target does not exist: %s", targetPath)
-		}
-		return fmt.Errorf("stat store target: %w", err)
-	}
-
-	if !targetInfo.Mode().IsRegular() {
-		return fmt.Errorf("store target must be a regular file: %s", targetPath)
-	}
-
-	if err := u.EditorRunner.Run(editorPath, editorArgs, filepath.Clean(storeTargetPath)); err != nil {
-		return fmt.Errorf("run editor: %w", err)
-	}
-
-	return nil
+	return u.editOnePasswordDocument(config)
 }
 
 func (u EditTarget) editOnePasswordDocument(config domain.Config) error {

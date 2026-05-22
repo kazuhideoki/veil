@@ -70,7 +70,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 		runner := usecase.AddTarget{
 			FileSystem:      infra.OSFileSystem{},
 			TrackedChecker:  infra.GitCLI{},
-			StoreRuntime:    infra.EncryptedVolumeRuntime{},
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			TargetPath:      addFlags.Arg(0),
@@ -91,7 +90,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		runner := usecase.EditTarget{
 			FileSystem:      infra.OSFileSystem{},
-			StoreRuntime:    infra.EncryptedVolumeRuntime{},
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			EditorRunner:    infra.ExecEditorRunner{},
 			EditorPath:      os.Getenv("EDITOR"),
@@ -217,9 +215,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		emergeFlags.SetOutput(stderr)
 
 		var allWorkspaces bool
-		var force bool
 		emergeFlags.BoolVar(&allWorkspaces, "all", false, "emerge registered targets for all workspaces")
-		emergeFlags.BoolVar(&force, "force", false, "emerge even when another device has an active encrypted store session")
 
 		if err := emergeFlags.Parse(args[1:]); err != nil {
 			return err
@@ -230,11 +226,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		cleaner := usecase.RunTTLCleaner{
-			FileSystem:     infra.OSFileSystem{},
-			StoreRuntime:   infra.EncryptedVolumeRuntime{},
-			Stdout:         stdout,
-			Force:          force,
-			ForceAvailable: true,
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
 		}
 		if err := cleaner.Run(); err != nil {
 			return err
@@ -242,11 +235,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		runner := usecase.EmergeTargets{
 			FileSystem:      infra.OSFileSystem{},
-			StoreRuntime:    infra.EncryptedVolumeRuntime{},
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
-			Force:           force,
 		}
 
 		return runner.Run()
@@ -271,7 +262,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		runner := usecase.VanishTargets{
 			FileSystem:      infra.OSFileSystem{},
-			StoreRuntime:    infra.EncryptedVolumeRuntime{},
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
@@ -293,9 +283,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.StatusTargets{
-			FileSystem:         infra.OSFileSystem{},
-			StoreStatusChecker: infra.EncryptedVolumeRuntime{},
-			Stdout:             stdout,
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
 		}
 
 		return runner.Run()
@@ -312,9 +301,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.RunTTLCleaner{
-			FileSystem:   infra.OSFileSystem{},
-			StoreRuntime: infra.EncryptedVolumeRuntime{},
-			Stdout:       stdout,
+			FileSystem: infra.OSFileSystem{},
+			Stdout:     stdout,
 		}
 
 		return runner.Run()

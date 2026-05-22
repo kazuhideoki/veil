@@ -21,13 +21,11 @@ type vanishFileSystem interface {
 	Rename(oldpath, newpath string) error
 	Stat(name string) (os.FileInfo, error)
 	Lstat(name string) (os.FileInfo, error)
-	Readlink(name string) (string, error)
 	Remove(name string) error
 }
 
 type VanishTargets struct {
 	FileSystem      vanishFileSystem
-	StoreRuntime    EncryptedStoreRuntime
 	DocumentRuntime OnePasswordDocumentRuntime
 	Stdout          io.Writer
 	Now             func() time.Time
@@ -49,6 +47,9 @@ func (u VanishTargets) Run() error {
 
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
+	if err := requireOnePasswordConfig(config); err != nil {
+		return err
+	}
 	now := currentTime(u.Now)
 
 	statePath, state, err := loadState(u.FileSystem)
@@ -61,84 +62,7 @@ func (u VanishTargets) Run() error {
 		return err
 	}
 
-	if config.IsOnePasswordStore() {
-		return u.vanishOnePasswordDocuments(config, statePath, state, workspaces, now)
-	}
-
-	outputLayout := newVanishOutputLayout(u.AllWorkspaces, workspaces)
-	var vanishErr error
-
-	for _, entry := range workspaces {
-		workspaceRootMissing := false
-		if u.AllWorkspaces {
-			if _, err := u.FileSystem.Stat(entry.workspace.Root); err != nil && errors.Is(err, os.ErrNotExist) {
-				workspaceRootMissing = true
-			}
-		}
-
-		for _, target := range entry.workspace.Targets {
-			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
-			if workspaceRootMissing {
-				if err := state.RemoveLease(entry.id, target); err != nil {
-					wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
-					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
-					vanishErr = errors.Join(vanishErr, wrappedErr)
-					continue
-				}
-
-				outputLayout.writeMissingWorkspaceTarget(u.Stdout, entry.id, target, entry.workspace.Root)
-				continue
-			}
-
-			storeTargetPath, err := config.StoreTargetPath(entry.id, target)
-			if err != nil {
-				if u.AllWorkspaces {
-					wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
-					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
-					vanishErr = errors.Join(vanishErr, wrappedErr)
-					continue
-				}
-				return wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
-			}
-
-			status, err := vanishTarget(u.FileSystem, workspaceTargetPath, storeTargetPath)
-			if err != nil {
-				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
-				if u.AllWorkspaces {
-					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
-					vanishErr = errors.Join(vanishErr, wrappedErr)
-					continue
-				}
-				return wrappedErr
-			}
-
-			if err := state.RemoveLease(entry.id, target); err != nil {
-				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
-				if u.AllWorkspaces {
-					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
-					vanishErr = errors.Join(vanishErr, wrappedErr)
-					continue
-				}
-				return wrappedErr
-			}
-
-			outputLayout.writeTarget(u.Stdout, entry.id, target, status)
-		}
-	}
-
-	if err := persistState(u.FileSystem, statePath, state); err != nil {
-		return err
-	}
-
-	if err := unmountStoreIfIdle(u.StoreRuntime, config, state, now, u.Stdout); err != nil {
-		return err
-	}
-
-	if vanishErr != nil {
-		return vanishErr
-	}
-
-	return nil
+	return u.vanishOnePasswordDocuments(config, statePath, state, workspaces, now)
 }
 
 func (u VanishTargets) vanishOnePasswordDocuments(config domain.Config, statePath string, state domain.State, workspaces []emergeWorkspace, now time.Time) error {
@@ -336,67 +260,4 @@ func wrapVanishTargetError(allWorkspaces bool, workspaceID, target string, err e
 	}
 
 	return fmt.Errorf("%s: %w", emergeTargetLabel(allWorkspaces, workspaceID, target), err)
-}
-
-func vanishTarget(fs vanishFileSystem, workspaceTargetPath, storeTargetPath string) (string, error) {
-	info, err := fs.Lstat(workspaceTargetPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "already vanished", nil
-		}
-		return "", fmt.Errorf("stat workspace target: %w", err)
-	}
-
-	// Only Veil-managed symlinks should be removed from the workspace.
-	if info.Mode()&os.ModeSymlink == 0 {
-		return "skipped", nil
-	}
-
-	managed, err := isManagedWorkspaceSymlink(fs, workspaceTargetPath, storeTargetPath)
-	if err != nil {
-		return "", err
-	}
-	if !managed {
-		return "skipped", nil
-	}
-
-	if err := fs.Remove(workspaceTargetPath); err != nil {
-		return "", fmt.Errorf("remove workspace symlink: %w", err)
-	}
-
-	return "vanished", nil
-}
-
-func absoluteLinkTargetPath(workspaceTargetPath, linkTarget string) string {
-	if !filepath.IsAbs(linkTarget) {
-		linkTarget = filepath.Join(filepath.Dir(workspaceTargetPath), linkTarget)
-	}
-
-	return filepath.Clean(linkTarget)
-}
-
-func isManagedWorkspaceSymlink(fs vanishFileSystem, workspaceTargetPath, storeTargetPath string) (bool, error) {
-	linkTarget, err := fs.Readlink(workspaceTargetPath)
-	if err != nil {
-		return false, fmt.Errorf("read workspace symlink: %w", err)
-	}
-
-	absoluteLinkTarget := absoluteLinkTargetPath(workspaceTargetPath, linkTarget)
-	absoluteStoreTargetPath := filepath.Clean(storeTargetPath)
-
-	resolvedLinkTarget, err := resolveLinkTarget(fs, workspaceTargetPath, linkTarget)
-	if err != nil {
-		// Broken managed symlinks should still be removable if they point at the expected store path.
-		return absoluteLinkTarget == absoluteStoreTargetPath, nil
-	}
-
-	resolvedStoreTargetPath, err := fs.EvalSymlinks(storeTargetPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return absoluteLinkTarget == absoluteStoreTargetPath, nil
-		}
-		return false, fmt.Errorf("canonicalize store target: %w", err)
-	}
-
-	return resolvedLinkTarget == resolvedStoreTargetPath, nil
 }

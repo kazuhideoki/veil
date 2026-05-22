@@ -100,12 +100,12 @@ func TestParseStateTOMLRoundTripsRenderedState(t *testing.T) {
 	}
 }
 
-func TestStateLeaseRendersEncryptedStorePaths(t *testing.T) {
+func TestStateLeaseRendersOnePasswordDocumentReference(t *testing.T) {
 	state := DefaultState()
 	mountedAt := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)
 	expiresAt := mountedAt.Add(24 * time.Hour)
 
-	if err := state.UpsertLeaseForStore("myapp", ".env", mountedAt, expiresAt, DefaultStoreID, "/tmp/myapp/.env", "/tmp/mount/workspaces/myapp/.env"); err != nil {
+	if err := state.UpsertLeaseForStore("myapp", ".env", mountedAt, expiresAt, "1password", "/tmp/myapp/.env", "item-1"); err != nil {
 		t.Fatalf("UpsertLeaseForStore() returned error: %v", err)
 	}
 
@@ -116,9 +116,9 @@ func TestStateLeaseRendersEncryptedStorePaths(t *testing.T) {
 
 	rendered := string(data)
 	for _, want := range []string{
-		`store_id = "default"`,
+		`store_id = "1password"`,
 		`workspace_path = "/tmp/myapp/.env"`,
-		`store_path = "/tmp/mount/workspaces/myapp/.env"`,
+		`store_path = "item-1"`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered = %q, want substring %q", rendered, want)

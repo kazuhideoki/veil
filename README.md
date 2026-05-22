@@ -54,13 +54,6 @@ veil vanish
 veil vanish --all
 ```
 
-If a legacy `encrypted_volume` or file-backed store source is deleted while a
-target is emerged, `veil status` reports it as `missing-source`. The deleted
-contents cannot be reconstructed by Veil, so this legacy store backend cannot
-recover the deleted source automatically. With the default 1Password document
-backend, `veil emerge` can recreate a workspace file from the 1Password document
-as long as the document still exists.
-
 ## Configuration
 
 Veil is designed around a single global config file:

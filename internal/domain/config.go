@@ -11,25 +11,19 @@ import (
 )
 
 const (
-	LegacyPlainStorePath    = "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore"
 	DefaultStoreBackend     = OnePasswordBackend
 	DefaultOnePasswordVault = "Personal"
-	PlainStoreBackend       = "plain"
-	EncryptedVolumeBackend  = "encrypted_volume"
 	OnePasswordBackend      = "1password_document"
 	DefaultStoreID          = "default"
 	DefaultTTL              = "24h"
 )
 
 type Config struct {
-	Version     int                  `toml:"version"`
-	StorePath   string               `toml:"store_path"`
-	DefaultTTL  string               `toml:"default_ttl"`
-	Store       StoreConfig          `toml:"store"`
-	KeyProvider KeyProviderConfig    `toml:"key_provider"`
-	Session     SessionConfig        `toml:"session"`
-	Documents   []DocumentConfig     `toml:"documents,omitempty"`
-	Workspaces  map[string]Workspace `toml:"workspaces"`
+	Version    int                  `toml:"version"`
+	DefaultTTL string               `toml:"default_ttl"`
+	Store      StoreConfig          `toml:"store"`
+	Documents  []DocumentConfig     `toml:"documents,omitempty"`
+	Workspaces map[string]Workspace `toml:"workspaces"`
 }
 
 type Workspace struct {
@@ -39,21 +33,8 @@ type Workspace struct {
 }
 
 type StoreConfig struct {
-	Backend    string `toml:"backend"`
-	BundlePath string `toml:"bundle_path,omitempty"`
-	MountPath  string `toml:"mount_path,omitempty"`
-	VolumeName string `toml:"volume_name,omitempty"`
-	Vault      string `toml:"vault,omitempty"`
-}
-
-type KeyProviderConfig struct {
-	Type string `toml:"type,omitempty"`
-	Ref  string `toml:"ref,omitempty"`
-}
-
-type SessionConfig struct {
-	Directory  string `toml:"directory,omitempty"`
-	StaleAfter string `toml:"stale_after,omitempty"`
+	Backend string `toml:"backend"`
+	Vault   string `toml:"vault,omitempty"`
 }
 
 type DocumentConfig struct {
@@ -72,9 +53,6 @@ func DefaultConfig() Config {
 		Store: StoreConfig{
 			Backend: DefaultStoreBackend,
 			Vault:   DefaultOnePasswordVault,
-		},
-		Session: SessionConfig{
-			StaleAfter: DefaultTTL,
 		},
 		Workspaces: map[string]Workspace{},
 	}
@@ -103,37 +81,11 @@ func (c Config) RenderTOML() ([]byte, error) {
 
 	c.applyDefaults()
 	fmt.Fprintf(&builder, "version = %d\n", c.Version)
-	if c.Store.Backend == EncryptedVolumeBackend {
-		fmt.Fprintf(&builder, "default_ttl = %s\n", strconv.Quote(c.DefaultTTL))
-		builder.WriteString("\n[store]\n")
-		fmt.Fprintf(&builder, "backend = %s\n", strconv.Quote(c.Store.Backend))
-		fmt.Fprintf(&builder, "bundle_path = %s\n", strconv.Quote(c.Store.BundlePath))
-		fmt.Fprintf(&builder, "mount_path = %s\n", strconv.Quote(c.Store.MountPath))
-		if c.Store.VolumeName != "" {
-			fmt.Fprintf(&builder, "volume_name = %s\n", strconv.Quote(c.Store.VolumeName))
-		}
-		builder.WriteString("\n[key_provider]\n")
-		fmt.Fprintf(&builder, "type = %s\n", strconv.Quote(c.KeyProvider.Type))
-		fmt.Fprintf(&builder, "ref = %s\n", strconv.Quote(c.KeyProvider.Ref))
-		if c.Session.Directory != "" || c.Session.StaleAfter != "" {
-			builder.WriteString("\n[session]\n")
-			if c.Session.Directory != "" {
-				fmt.Fprintf(&builder, "directory = %s\n", strconv.Quote(c.Session.Directory))
-			}
-			if c.Session.StaleAfter != "" {
-				fmt.Fprintf(&builder, "stale_after = %s\n", strconv.Quote(c.Session.StaleAfter))
-			}
-		}
-	} else if c.Store.Backend == OnePasswordBackend {
-		fmt.Fprintf(&builder, "default_ttl = %s\n", strconv.Quote(c.DefaultTTL))
-		builder.WriteString("\n[store]\n")
-		fmt.Fprintf(&builder, "backend = %s\n", strconv.Quote(c.Store.Backend))
-		if c.Store.Vault != "" {
-			fmt.Fprintf(&builder, "vault = %s\n", strconv.Quote(c.Store.Vault))
-		}
-	} else {
-		fmt.Fprintf(&builder, "store_path = %s\n", strconv.Quote(c.StorePath))
-		fmt.Fprintf(&builder, "default_ttl = %s\n", strconv.Quote(c.DefaultTTL))
+	fmt.Fprintf(&builder, "default_ttl = %s\n", strconv.Quote(c.DefaultTTL))
+	builder.WriteString("\n[store]\n")
+	fmt.Fprintf(&builder, "backend = %s\n", strconv.Quote(c.Store.Backend))
+	if c.Store.Vault != "" {
+		fmt.Fprintf(&builder, "vault = %s\n", strconv.Quote(c.Store.Vault))
 	}
 
 	documents := append([]DocumentConfig(nil), c.Documents...)
@@ -208,29 +160,9 @@ func (c *Config) AddWorkspace(id, root string) error {
 	return nil
 }
 
-func (c Config) StoreTargetPath(workspaceID, target string) (string, error) {
-	if err := validateWorkspaceID(workspaceID); err != nil {
-		return "", err
-	}
-
-	normalizedTarget, err := normalizeTargetPath(target)
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(c.EffectiveStorePath(), "workspaces", workspaceID, normalizedTarget), nil
-}
-
 func (c *Config) applyDefaults() {
 	if c.Store.Backend == "" {
-		if c.StorePath != "" {
-			c.Store.Backend = PlainStoreBackend
-		} else {
-			c.Store.Backend = DefaultStoreBackend
-		}
-	}
-	if c.Store.Backend == PlainStoreBackend && c.StorePath == "" {
-		c.StorePath = LegacyPlainStorePath
+		c.Store.Backend = DefaultStoreBackend
 	}
 	if c.Store.Backend == OnePasswordBackend && c.Store.Vault == "" {
 		c.Store.Vault = DefaultOnePasswordVault
@@ -238,23 +170,9 @@ func (c *Config) applyDefaults() {
 	if c.DefaultTTL == "" {
 		c.DefaultTTL = DefaultTTL
 	}
-	if (c.Store.Backend == EncryptedVolumeBackend || c.Store.Backend == OnePasswordBackend) && c.Version < 2 {
+	if c.Store.Backend == OnePasswordBackend && c.Version < 2 {
 		c.Version = 2
 	}
-	if c.Session.StaleAfter == "" {
-		c.Session.StaleAfter = DefaultTTL
-	}
-}
-
-func (c Config) EffectiveStorePath() string {
-	if c.Store.Backend == EncryptedVolumeBackend && c.Store.MountPath != "" {
-		return c.Store.MountPath
-	}
-	return c.StorePath
-}
-
-func (c Config) IsEncryptedVolumeStore() bool {
-	return c.Store.Backend == EncryptedVolumeBackend
 }
 
 func (c Config) IsOnePasswordStore() bool {
