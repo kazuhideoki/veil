@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -93,6 +94,40 @@ func TestEmergeTargetsMaterializesOnePasswordDocumentAndRecordsHash(t *testing.T
 	}
 	if !strings.Contains(string(stateData), `plaintext_sha256 = "`+sha256Hex([]byte("TOKEN=test\n"))+`"`) {
 		t.Fatalf("state = %q", string(stateData))
+	}
+}
+
+func TestEmergeTargetsAllWorkspacesReadsOnePasswordDocumentsInParallel(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env", "config/app.json"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	appendDocumentConfig(t, tempHome, "config/app.json", "item-2", sha256Hex([]byte("{\"key\":\"value\"}\n")))
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newBlockingOnePasswordRuntime(map[string][]byte{
+		"item-1": []byte("TOKEN=test\n"),
+		"item-2": []byte("{\"key\":\"value\"}\n"),
+	})
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		Now:             func() time.Time { return time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC) },
+		AllWorkspaces:   true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if got := runtime.maxConcurrentReads(); got < 2 {
+		t.Fatalf("max concurrent reads = %d, want at least 2", got)
+	}
+	for _, target := range []string{".env", "config/app.json"} {
+		if _, err := os.Stat(filepath.Join(workspaceRoot, target)); err != nil {
+			t.Fatalf("Stat(%q) returned error: %v", target, err)
+		}
 	}
 }
 
@@ -587,6 +622,14 @@ type fakeOnePasswordRuntime struct {
 	createdTags  []string
 }
 
+type blockingOnePasswordRuntime struct {
+	documents     map[string][]byte
+	release       chan struct{}
+	mu            sync.Mutex
+	currentReads  int
+	maxConcurrent int
+}
+
 type mutatingEditorRunner struct {
 	data []byte
 }
@@ -599,6 +642,17 @@ func newFakeOnePasswordRuntime() *fakeOnePasswordRuntime {
 	return &fakeOnePasswordRuntime{
 		documents: map[string][]byte{},
 		nextID:    1,
+	}
+}
+
+func newBlockingOnePasswordRuntime(documents map[string][]byte) *blockingOnePasswordRuntime {
+	copied := make(map[string][]byte, len(documents))
+	for itemID, data := range documents {
+		copied[itemID] = append([]byte(nil), data...)
+	}
+	return &blockingOnePasswordRuntime{
+		documents: copied,
+		release:   make(chan struct{}),
 	}
 }
 
@@ -619,4 +673,50 @@ func (f *fakeOnePasswordRuntime) ReadDocument(vault, itemID string) ([]byte, err
 func (f *fakeOnePasswordRuntime) UpdateDocument(vault, itemID string, data []byte) error {
 	f.documents[itemID] = append([]byte(nil), data...)
 	return nil
+}
+
+func (b *blockingOnePasswordRuntime) CreateDocument(vault, title string, tags []string, data []byte) (string, error) {
+	return "", errors.New("unexpected create document")
+}
+
+func (b *blockingOnePasswordRuntime) ReadDocument(vault, itemID string) ([]byte, error) {
+	b.mu.Lock()
+	b.currentReads++
+	if b.currentReads > b.maxConcurrent {
+		b.maxConcurrent = b.currentReads
+	}
+	if b.maxConcurrent >= 2 {
+		select {
+		case <-b.release:
+		default:
+			close(b.release)
+		}
+	}
+	b.mu.Unlock()
+
+	select {
+	case <-b.release:
+	case <-time.After(time.Second):
+		return nil, errors.New("timed out waiting for parallel read")
+	}
+	defer func() {
+		b.mu.Lock()
+		b.currentReads--
+		b.mu.Unlock()
+	}()
+
+	b.mu.Lock()
+	data := append([]byte(nil), b.documents[itemID]...)
+	b.mu.Unlock()
+	return data, nil
+}
+
+func (b *blockingOnePasswordRuntime) UpdateDocument(vault, itemID string, data []byte) error {
+	return errors.New("unexpected update document")
+}
+
+func (b *blockingOnePasswordRuntime) maxConcurrentReads() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.maxConcurrent
 }
