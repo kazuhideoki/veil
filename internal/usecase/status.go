@@ -194,7 +194,7 @@ func writeAllWorkspaceTargetStatus(w io.Writer, fs statusFileSystem, config doma
 	for _, workspaceID := range workspaceIDs {
 		workspace := config.Workspaces[workspaceID]
 		if len(workspace.Targets) == 0 {
-			fmt.Fprintf(w, "  %-*s  none\n", width, workspaceID)
+			fmt.Fprintf(w, "  %-*s  no-targets\n", width, workspaceID)
 			continue
 		}
 		for _, target := range workspace.Targets {

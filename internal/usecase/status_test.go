@@ -400,8 +400,9 @@ func TestStatusTargetsReportsAllWorkspaces(t *testing.T) {
 	storeRoot := filepath.Join(tempHome, "veil-store")
 	alphaRoot := filepath.Join(tempHome, "alpha")
 	betaRoot := filepath.Join(tempHome, "beta")
+	emptyRoot := filepath.Join(tempHome, "empty")
 	otherRoot := filepath.Join(tempHome, "other")
-	for _, path := range []string{alphaRoot, betaRoot, otherRoot} {
+	for _, path := range []string{alphaRoot, betaRoot, emptyRoot, otherRoot} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("MkdirAll() returned error: %v", err)
 		}
@@ -419,7 +420,8 @@ func TestStatusTargetsReportsAllWorkspaces(t *testing.T) {
 	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "config.toml"),
 		"version = 1\nstore_path = "+workspaceRootQuoted(storeRoot)+"\ndefault_ttl = \"24h\"\n\n"+
 			"[workspaces.alpha]\nroot = "+workspaceRootQuoted(resolvedAlphaRoot)+"\ntargets = [\".env\"]\n\n"+
-			"[workspaces.beta]\nroot = "+workspaceRootQuoted(resolvedBetaRoot)+"\ntargets = [\"config/app.json\"]\n")
+			"[workspaces.beta]\nroot = "+workspaceRootQuoted(resolvedBetaRoot)+"\ntargets = [\"config/app.json\"]\n\n"+
+			"[workspaces.empty]\nroot = "+workspaceRootQuoted(emptyRoot)+"\ntargets = []\n")
 
 	alphaStorePath := filepath.Join(storeRoot, "workspaces", "alpha", ".env")
 	betaStorePath := filepath.Join(storeRoot, "workspaces", "beta", "config", "app.json")
@@ -465,6 +467,7 @@ func TestStatusTargetsReportsAllWorkspaces(t *testing.T) {
 		".env",
 		"beta   absent",
 		"config/app.json",
+		"empty  no-targets",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
