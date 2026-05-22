@@ -133,6 +133,24 @@ func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID
 		return false, err
 	}
 	if ok {
+		if lease.StoreID != onePasswordStoreID {
+			return false, fmt.Errorf("target is not emerged from 1Password document store: %s", target)
+		}
+		if lease.StorePath != "" && lease.StorePath != itemID {
+			return false, fmt.Errorf("target lease does not match registered 1Password document: %s", target)
+		}
+		if !lease.ExpiresAt.After(now) {
+			return false, fmt.Errorf("target lease is expired; re-run veil emerge before update: %s", target)
+		}
+		if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
+			return false, fmt.Errorf("target workspace path does not match active lease: %s", target)
+		}
+		if lease.PlaintextHash == "" {
+			if sha256Hex(currentData) != sha256Hex(data) {
+				return false, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before update: %s", target)
+			}
+			return false, nil
+		}
 		if _, err := validateOnePasswordMaterializedTarget(fs, lease, workspaceTargetPath, target, itemID, now); err != nil {
 			return false, err
 		}
