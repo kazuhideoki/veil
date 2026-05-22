@@ -270,6 +270,9 @@ func TestEmergeTargetsReturnsErrorWhenStoreSourceIsMissing(t *testing.T) {
 	if !strings.Contains(err.Error(), "store target does not exist") {
 		t.Fatalf("error = %q", err)
 	}
+	if !strings.Contains(err.Error(), "cannot be reconstructed") {
+		t.Fatalf("error = %q", err)
+	}
 }
 
 func TestEmergeTargetsUnmountsEncryptedVolumeWhenStoreSourceIsMissing(t *testing.T) {

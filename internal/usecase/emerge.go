@@ -131,7 +131,7 @@ func (u EmergeTargets) Run() (runErr error) {
 			storeInfo, err := u.FileSystem.Stat(storeTargetPath)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
-					wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("store target does not exist: %s", target))
+					wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, missingStoreTargetError(target))
 					if u.AllWorkspaces {
 						outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
 						emergeErr = errors.Join(emergeErr, wrappedErr)
@@ -486,7 +486,7 @@ func runEmergeFileTask(fs emergeFileSystem, config domain.Config, task emergeFil
 	storeInfo, err := fs.Stat(storeTargetPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("store target does not exist: %s", task.target))
+			result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, missingStoreTargetError(task.target))
 			return result
 		}
 		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("stat store target: %w", err))
@@ -869,6 +869,10 @@ func cloneState(state domain.State) domain.State {
 	cloned := state
 	cloned.Leases = append([]domain.Lease(nil), state.Leases...)
 	return cloned
+}
+
+func missingStoreTargetError(target string) error {
+	return fmt.Errorf("store target does not exist: %s; legacy encrypted_volume/file-backed store sources cannot be reconstructed by Veil", target)
 }
 
 func ensureEmergedTarget(fs emergeFileSystem, workspaceTargetPath, storeTargetPath string) (bool, error) {
