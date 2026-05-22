@@ -169,6 +169,9 @@ func TestEmergeTargetsAllWorkspacesReadsOnePasswordDocumentsInParallel(t *testin
 	if err := uc.Run(); err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
+	if got := runtime.authenticateCalls(); got != 1 {
+		t.Fatalf("authenticate calls = %d, want 1", got)
+	}
 	if got := runtime.maxConcurrentReads(); got < 2 {
 		t.Fatalf("max concurrent reads = %d, want at least 2", got)
 	}
@@ -176,6 +179,43 @@ func TestEmergeTargetsAllWorkspacesReadsOnePasswordDocumentsInParallel(t *testin
 		if _, err := os.Stat(filepath.Join(workspaceRoot, target)); err != nil {
 			t.Fatalf("Stat(%q) returned error: %v", target, err)
 		}
+	}
+}
+
+func TestEmergeTargetsAllWorkspacesAuthenticatesOnePasswordBeforeParallelReads(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	prepareOnePasswordWorkspace(t, tempHome, `targets = [".env", "config/app.json"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	appendDocumentConfig(t, tempHome, "config/app.json", "item-2", sha256Hex([]byte("{\"key\":\"value\"}\n")))
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newBlockingOnePasswordRuntime(map[string][]byte{
+		"item-1": []byte("TOKEN=test\n"),
+		"item-2": []byte("{\"key\":\"value\"}\n"),
+	})
+	runtime.authErr = errors.New("locked")
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		Now:             func() time.Time { return time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC) },
+		AllWorkspaces:   true,
+	}
+
+	err := uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "authenticate 1Password CLI: locked") {
+		t.Fatalf("error = %q", err)
+	}
+	if got := runtime.authenticateCalls(); got != 1 {
+		t.Fatalf("authenticate calls = %d, want 1", got)
+	}
+	if got := runtime.maxConcurrentReads(); got != 0 {
+		t.Fatalf("max concurrent reads = %d, want 0", got)
 	}
 }
 
@@ -680,6 +720,8 @@ type blockingOnePasswordRuntime struct {
 	mu            sync.Mutex
 	currentReads  int
 	maxConcurrent int
+	authCalls     int
+	authErr       error
 }
 
 type mutatingEditorRunner struct {
@@ -731,6 +773,13 @@ func (b *blockingOnePasswordRuntime) CreateDocument(vault, title string, tags []
 	return "", errors.New("unexpected create document")
 }
 
+func (b *blockingOnePasswordRuntime) Authenticate() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.authCalls++
+	return b.authErr
+}
+
 func (b *blockingOnePasswordRuntime) ReadDocument(vault, itemID string) ([]byte, error) {
 	b.mu.Lock()
 	b.currentReads++
@@ -771,4 +820,10 @@ func (b *blockingOnePasswordRuntime) maxConcurrentReads() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.maxConcurrent
+}
+
+func (b *blockingOnePasswordRuntime) authenticateCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.authCalls
 }

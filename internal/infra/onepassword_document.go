@@ -10,6 +10,18 @@ import (
 
 type OnePasswordDocumentRuntime struct{}
 
+func (OnePasswordDocumentRuntime) Authenticate() error {
+	output, err := exec.Command("op", "account", "get").CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("%s", message)
+	}
+	return nil
+}
+
 func (OnePasswordDocumentRuntime) CreateDocument(vault, title string, tags []string, data []byte) (string, error) {
 	tempFile, err := os.CreateTemp("", "veil-1password-create-*")
 	if err != nil {
