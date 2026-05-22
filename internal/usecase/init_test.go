@@ -68,9 +68,17 @@ func TestInitConfigCreatesConfigFile(t *testing.T) {
 		t.Fatalf("workspace root = %q, want %q", workspace.Root, currentDir)
 	}
 
-	wantStorePath := filepath.Join(tempHome, "Library", "Mobile Documents", "com~apple~CloudDocs", "VeilStore")
-	if config.StorePath != wantStorePath {
-		t.Fatalf("store path = %q, want %q", config.StorePath, wantStorePath)
+	if config.Store.Backend != domain.OnePasswordBackend {
+		t.Fatalf("store backend = %q, want %q", config.Store.Backend, domain.OnePasswordBackend)
+	}
+	if config.Store.Vault != domain.DefaultOnePasswordVault {
+		t.Fatalf("store vault = %q, want %q", config.Store.Vault, domain.DefaultOnePasswordVault)
+	}
+	if config.Version != 2 {
+		t.Fatalf("config version = %d, want 2", config.Version)
+	}
+	if config.StorePath != "" {
+		t.Fatalf("store path = %q, want empty", config.StorePath)
 	}
 	if len(workspace.Targets) != 0 {
 		t.Fatalf("workspace targets = %#v, want empty", workspace.Targets)

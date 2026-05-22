@@ -206,6 +206,7 @@ func TestAddWorkspaceRejectsWorkspaceIDWithPathSeparator(t *testing.T) {
 
 func TestConfigStoreTargetPathBuildsWorkspaceScopedPath(t *testing.T) {
 	config := DefaultConfig()
+	config.Store.Backend = PlainStoreBackend
 	config.StorePath = "/tmp/veil-store"
 
 	got, err := config.StoreTargetPath("myapp", "config/service-account.json")
@@ -277,6 +278,7 @@ targets = [".env"]
 
 func TestConfigStoreTargetPathRejectsInvalidWorkspaceID(t *testing.T) {
 	config := DefaultConfig()
+	config.Store.Backend = PlainStoreBackend
 	config.StorePath = "/tmp/veil-store"
 
 	_, err := config.StoreTargetPath("../myapp", ".env")
@@ -286,5 +288,27 @@ func TestConfigStoreTargetPathRejectsInvalidWorkspaceID(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "workspace id") {
 		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestParseConfigTOMLReadsLegacyPlainStoreSchema(t *testing.T) {
+	config, err := ParseConfigTOML([]byte(`
+version = 1
+store_path = "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore"
+default_ttl = "24h"
+
+[workspaces.myapp]
+root = "/tmp/myapp"
+targets = [".env"]
+`))
+	if err != nil {
+		t.Fatalf("ParseConfigTOML() returned error: %v", err)
+	}
+
+	if config.Store.Backend != PlainStoreBackend {
+		t.Fatalf("store backend = %q, want %q", config.Store.Backend, PlainStoreBackend)
+	}
+	if config.StorePath != "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore" {
+		t.Fatalf("store path = %q", config.StorePath)
 	}
 }

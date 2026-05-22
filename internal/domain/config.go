@@ -11,12 +11,14 @@ import (
 )
 
 const (
-	DefaultStorePath       = "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore"
-	DefaultStoreBackend    = "plain"
-	EncryptedVolumeBackend = "encrypted_volume"
-	OnePasswordBackend     = "1password_document"
-	DefaultStoreID         = "default"
-	DefaultTTL             = "24h"
+	LegacyPlainStorePath    = "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore"
+	DefaultStoreBackend     = OnePasswordBackend
+	DefaultOnePasswordVault = "Personal"
+	PlainStoreBackend       = "plain"
+	EncryptedVolumeBackend  = "encrypted_volume"
+	OnePasswordBackend      = "1password_document"
+	DefaultStoreID          = "default"
+	DefaultTTL              = "24h"
 )
 
 type Config struct {
@@ -65,11 +67,11 @@ type DocumentConfig struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Version:    1,
-		StorePath:  DefaultStorePath,
+		Version:    2,
 		DefaultTTL: DefaultTTL,
 		Store: StoreConfig{
 			Backend: DefaultStoreBackend,
+			Vault:   DefaultOnePasswordVault,
 		},
 		Session: SessionConfig{
 			StaleAfter: DefaultTTL,
@@ -79,7 +81,7 @@ func DefaultConfig() Config {
 }
 
 func ParseConfigTOML(data []byte) (Config, error) {
-	config := DefaultConfig()
+	var config Config
 	if err := toml.Unmarshal(data, &config); err != nil {
 		return Config{}, err
 	}
@@ -221,10 +223,17 @@ func (c Config) StoreTargetPath(workspaceID, target string) (string, error) {
 
 func (c *Config) applyDefaults() {
 	if c.Store.Backend == "" {
-		c.Store.Backend = DefaultStoreBackend
+		if c.StorePath != "" {
+			c.Store.Backend = PlainStoreBackend
+		} else {
+			c.Store.Backend = DefaultStoreBackend
+		}
 	}
-	if c.StorePath == "" {
-		c.StorePath = DefaultStorePath
+	if c.Store.Backend == PlainStoreBackend && c.StorePath == "" {
+		c.StorePath = LegacyPlainStorePath
+	}
+	if c.Store.Backend == OnePasswordBackend && c.Store.Vault == "" {
+		c.Store.Vault = DefaultOnePasswordVault
 	}
 	if c.DefaultTTL == "" {
 		c.DefaultTTL = DefaultTTL
@@ -409,6 +418,26 @@ func (c *Config) RemoveWorkspaceDocuments(workspaceID string) error {
 	filtered := c.Documents[:0]
 	for _, document := range c.Documents {
 		if document.WorkspaceID == workspaceID {
+			continue
+		}
+		filtered = append(filtered, document)
+	}
+	c.Documents = filtered
+	return nil
+}
+
+func (c *Config) RemoveDocument(workspaceID, target string) error {
+	if err := validateWorkspaceID(workspaceID); err != nil {
+		return err
+	}
+	normalizedTarget, err := normalizeTargetPath(target)
+	if err != nil {
+		return err
+	}
+
+	filtered := c.Documents[:0]
+	for _, document := range c.Documents {
+		if document.WorkspaceID == workspaceID && document.Target == normalizedTarget {
 			continue
 		}
 		filtered = append(filtered, document)

@@ -19,12 +19,12 @@ Veil is meant to solve this without introducing a heavy secret management platfo
 
 Veil uses a simple model:
 
-- Store the real secret files outside the workspace.
-- Link them into the workspace only when needed.
-- Remove those links explicitly, or clean up expired links the next time Veil runs.
+- Store the real secret files outside the workspace in 1Password.
+- Materialize them into the workspace only when needed.
+- Remove materialized files explicitly, or clean up expired files the next time Veil runs.
 
 For the application or tool using the file, nothing special changes. It still sees the file at the usual path.
-The initial design targets personal development on macOS and uses iCloud Drive as the default backing store so the same secret files can sync across devices with minimal setup.
+The default store backend keeps each secret file as a 1Password Document and materializes files into the workspace only while you need them.
 
 ## Example Workflow
 
@@ -41,13 +41,16 @@ veil add config/secrets
 # make managed files appear in the current workspace
 veil emerge
 
-# edit the source file safely
+# edit the source document safely
 veil edit .env
 
-# remove the mounted links from the workspace
+# commit materialized edits back to 1Password
+veil update .env
+
+# remove materialized files from the workspace
 veil vanish
 
-# remove mounted links from every registered workspace
+# remove materialized files from every registered workspace
 veil vanish --all
 ```
 
@@ -56,19 +59,28 @@ veil vanish --all
 Veil is designed around a single global config file:
 
 ```toml
-version = 1
-store_path = "~/Library/Mobile Documents/com~apple~CloudDocs/VeilStore"
+version = 2
 default_ttl = "24h"
+
+[store]
+backend = "1password_document"
+vault = "Personal"
 
 [workspaces.myapp]
 root = "/Users/kaz/dev/myapp"
 targets = [".env", "config/service-account.json"]
 ```
 
-Managed source files are derived by convention:
+Each managed target has document metadata:
 
-```text
-<store_path>/workspaces/<workspace_id>/<target-relative-path>
+```toml
+[[documents]]
+workspace_id = "myapp"
+target = ".env"
+item_id = "op-item-id"
+vault = "Personal"
+title = "Veil: myapp: .env"
+content_sha256 = "..."
 ```
 
 ## Development

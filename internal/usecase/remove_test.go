@@ -524,3 +524,144 @@ func TestRemoveTargetClearsLeaseState(t *testing.T) {
 		t.Fatalf("lease count = %d, want 0", got)
 	}
 }
+
+func TestRemoveOnePasswordTargetAfterVanishRemovesConfigDocumentAndLease(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=secret\n")))
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, filepath.Join(workspaceRoot, ".env"), "item-1", sha256Hex([]byte("TOKEN=secret\n"))); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	var stdout bytes.Buffer
+	uc := RemoveTarget{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &stdout,
+		TargetPath: ".env",
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	for _, unwanted := range []string{`target = ".env"`, `item_id = "item-1"`} {
+		if strings.Contains(string(configData), unwanted) {
+			t.Fatalf("config contents = %q, unwanted %q", string(configData), unwanted)
+		}
+	}
+	if !strings.Contains(string(configData), "targets = []") {
+		t.Fatalf("config contents = %q", string(configData))
+	}
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	if got := len(refreshed.Leases); got != 0 {
+		t.Fatalf("lease count = %d, want 0", got)
+	}
+	if !strings.Contains(stdout.String(), "removed target: .env") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestRemoveOnePasswordTargetRequiresVanish(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=secret\n")))
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	uc := RemoveTarget{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &bytes.Buffer{},
+		TargetPath: ".env",
+	}
+
+	err := uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "run veil vanish before remove") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestPurgeOnePasswordTargetAfterVanishRemovesConfigDocumentAndLease(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=secret\n")))
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, filepath.Join(workspaceRoot, ".env"), "item-1", sha256Hex([]byte("TOKEN=secret\n"))); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	var stdout bytes.Buffer
+	uc := PurgeTarget{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &stdout,
+		TargetPath: ".env",
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	for _, unwanted := range []string{`target = ".env"`, `item_id = "item-1"`} {
+		if strings.Contains(string(configData), unwanted) {
+			t.Fatalf("config contents = %q, unwanted %q", string(configData), unwanted)
+		}
+	}
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	if got := len(refreshed.Leases); got != 0 {
+		t.Fatalf("lease count = %d, want 0", got)
+	}
+	if !strings.Contains(stdout.String(), "purged target: .env") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestPurgeOnePasswordTargetRequiresVanish(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=secret\n")))
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	uc := PurgeTarget{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &bytes.Buffer{},
+		TargetPath: ".env",
+	}
+
+	err := uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "run veil vanish before purge") {
+		t.Fatalf("error = %q", err)
+	}
+}
