@@ -74,3 +74,22 @@ func TestRunInitCreatesOnePasswordConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestWithStateLockCreatesLockFile(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	called := false
+
+	if err := withStateLock(func() error {
+		called = true
+		if _, err := os.Stat(filepath.Join(homeDir, ".veil", "state.lock")); err != nil {
+			t.Fatalf("state lock was not created: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("withStateLock() returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("lock callback was not called")
+	}
+}

@@ -21,7 +21,7 @@ Veil uses a simple model:
 
 - Store the real secret files outside the workspace in 1Password.
 - Materialize them into the workspace only when needed.
-- Remove materialized files explicitly, or clean up expired files the next time Veil runs.
+- Remove materialized files explicitly, or clean up expired files with the TTL cleaner.
 
 For the application or tool using the file, nothing special changes. It still sees the file at the usual path.
 The default store backend keeps each secret file as a 1Password Document and materializes files into the workspace only while you need them.
@@ -39,6 +39,7 @@ veil add .env
 veil add config/secrets
 
 # make managed files appear in the current workspace
+# also ensures the macOS TTL cleanup agent is installed
 veil emerge
 
 # edit the source document safely
@@ -52,7 +53,24 @@ veil vanish
 
 # remove materialized files from every registered workspace
 veil vanish --all
+
+# manually repair or change the background cleanup interval
+veil ttl-agent install --interval 60
 ```
+
+## TTL Cleanup
+
+`default_ttl` controls how long a materialized file lease is valid. Expired clean files are removed by `veil ttl-cleaner`, and modified files are kept so local edits are not lost.
+
+`veil emerge` automatically installs and loads the macOS LaunchAgent that runs TTL cleanup in the background. Manual agent commands are available for repair, inspection, and interval changes:
+
+```bash
+veil ttl-agent install --interval 60
+veil ttl-agent status
+veil ttl-agent uninstall
+```
+
+The LaunchAgent runs `veil ttl-cleaner` at the configured interval and once at load. If the Mac is asleep or powered off at the exact expiration time, cleanup happens on the next scheduled run after the machine is awake.
 
 ## Configuration
 

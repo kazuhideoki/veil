@@ -17,6 +17,9 @@ Commands:
   emerge    Materialize registered 1Password document targets into the workspace (--all)
   status    Show target states for all registered workspaces
   vanish    Remove Veil-managed workspace targets (--all, --commit, --discard)
+  ttl-agent Install, uninstall, or show the macOS TTL cleanup LaunchAgent
+  ttl-cleaner
+            Remove expired materialized targets once
 
 Options:
   --help    Show this help message

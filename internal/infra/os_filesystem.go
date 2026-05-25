@@ -98,3 +98,9 @@ func (ExecEditorRunner) Run(editorPath string, editorArgs []string, targetPath s
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+type ExecCommandRunner struct{}
+
+func (ExecCommandRunner) Run(command string, args ...string) ([]byte, error) {
+	return exec.Command(command, args...).CombinedOutput()
+}

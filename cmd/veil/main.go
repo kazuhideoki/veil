@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
+	"syscall"
 
 	"github.com/kazuhideoki/veil/internal/infra"
 	"github.com/kazuhideoki/veil/internal/usecase"
@@ -54,7 +57,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			WorkspaceID: workspaceID,
 		}
 
-		return runner.Run()
+		return withStateLock(runner.Run)
 	case "add":
 		addFlags := flag.NewFlagSet("add", flag.ContinueOnError)
 		addFlags.SetOutput(stderr)
@@ -75,7 +78,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			TargetPath:      addFlags.Arg(0),
 		}
 
-		return runner.Run()
+		return withStateLock(runner.Run)
 	case "edit":
 		editFlags := flag.NewFlagSet("edit", flag.ContinueOnError)
 		editFlags.SetOutput(stderr)
@@ -96,7 +99,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			TargetPath:      editFlags.Arg(0),
 		}
 
-		return runner.Run()
+		return withStateLock(runner.Run)
 	case "update":
 		updateFlags := flag.NewFlagSet("update", flag.ContinueOnError)
 		updateFlags.SetOutput(stderr)
@@ -116,7 +119,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			TargetPath:      updateFlags.Arg(0),
 		}
 
-		return runner.Run()
+		return withStateLock(runner.Run)
 	case "remove":
 		removeFlags := flag.NewFlagSet("remove", flag.ContinueOnError)
 		removeFlags.SetOutput(stderr)
@@ -135,7 +138,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			TargetPath: removeFlags.Arg(0),
 		}
 
-		return runner.Run()
+		return withStateLock(runner.Run)
 	case "purge":
 		purgeFlags := flag.NewFlagSet("purge", flag.ContinueOnError)
 		purgeFlags.SetOutput(stderr)
@@ -154,7 +157,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			TargetPath: purgeFlags.Arg(0),
 		}
 
-		return runner.Run()
+		return withStateLock(runner.Run)
 	case "workspace":
 		if len(args) < 2 {
 			return fmt.Errorf("workspace requires a subcommand")
@@ -182,7 +185,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				WorkspaceID: workspaceID,
 			}
 
-			return runner.Run()
+			return withStateLock(runner.Run)
 		case "purge":
 			workspacePurgeFlags := flag.NewFlagSet("workspace purge", flag.ContinueOnError)
 			workspacePurgeFlags.SetOutput(stderr)
@@ -206,7 +209,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				AssumeYes:   assumeYes,
 			}
 
-			return runner.Run()
+			return withStateLock(runner.Run)
 		default:
 			return fmt.Errorf("unsupported workspace arguments: %v", args[1:])
 		}
@@ -229,18 +232,26 @@ func run(args []string, stdout, stderr io.Writer) error {
 			FileSystem: infra.OSFileSystem{},
 			Stdout:     stdout,
 		}
-		if err := cleaner.Run(); err != nil {
-			return err
-		}
-
 		runner := usecase.EmergeTargets{
 			FileSystem:      infra.OSFileSystem{},
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
 		}
+		agent, err := defaultTTLAgent(stdout)
+		if err != nil {
+			return err
+		}
 
-		return runner.Run()
+		return withStateLock(func() error {
+			if err := agent.EnsureInstalled(); err != nil {
+				return err
+			}
+			if err := cleaner.Run(); err != nil {
+				return err
+			}
+			return runner.Run()
+		})
 	case "vanish":
 		vanishFlags := flag.NewFlagSet("vanish", flag.ContinueOnError)
 		vanishFlags.SetOutput(stderr)
@@ -269,7 +280,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			Discard:         discard,
 		}
 
-		return runner.Run()
+		return withStateLock(runner.Run)
 	case "status":
 		statusFlags := flag.NewFlagSet("status", flag.ContinueOnError)
 		statusFlags.SetOutput(stderr)
@@ -305,10 +316,127 @@ func run(args []string, stdout, stderr io.Writer) error {
 			Stdout:     stdout,
 		}
 
-		return runner.Run()
+		return withStateLock(runner.Run)
+	case "ttl-agent":
+		if len(args) < 2 {
+			return fmt.Errorf("ttl-agent requires a subcommand")
+		}
+
+		switch args[1] {
+		case "install":
+			agentFlags := flag.NewFlagSet("ttl-agent install", flag.ContinueOnError)
+			agentFlags.SetOutput(stderr)
+
+			var intervalSeconds int
+			var label string
+			agentFlags.IntVar(&intervalSeconds, "interval", 60, "seconds between ttl-cleaner runs")
+			agentFlags.StringVar(&label, "label", usecase.DefaultTTLAgentLabel, "launch agent label")
+
+			if err := agentFlags.Parse(args[2:]); err != nil {
+				return err
+			}
+			if agentFlags.NArg() != 0 {
+				return fmt.Errorf("ttl-agent install does not accept positional arguments: %v", agentFlags.Args())
+			}
+
+			runner, err := defaultTTLAgent(stdout)
+			if err != nil {
+				return err
+			}
+			runner.Label = label
+			runner.IntervalSeconds = intervalSeconds
+			return runner.Install()
+		case "uninstall":
+			agentFlags := flag.NewFlagSet("ttl-agent uninstall", flag.ContinueOnError)
+			agentFlags.SetOutput(stderr)
+
+			var label string
+			agentFlags.StringVar(&label, "label", usecase.DefaultTTLAgentLabel, "launch agent label")
+
+			if err := agentFlags.Parse(args[2:]); err != nil {
+				return err
+			}
+			if agentFlags.NArg() != 0 {
+				return fmt.Errorf("ttl-agent uninstall does not accept positional arguments: %v", agentFlags.Args())
+			}
+
+			runner := usecase.TTLAgent{
+				FileSystem:    infra.OSFileSystem{},
+				CommandRunner: infra.ExecCommandRunner{},
+				Stdout:        stdout,
+				UserID:        strconv.Itoa(os.Getuid()),
+				Label:         label,
+			}
+			return runner.Uninstall()
+		case "status":
+			agentFlags := flag.NewFlagSet("ttl-agent status", flag.ContinueOnError)
+			agentFlags.SetOutput(stderr)
+
+			var label string
+			agentFlags.StringVar(&label, "label", usecase.DefaultTTLAgentLabel, "launch agent label")
+
+			if err := agentFlags.Parse(args[2:]); err != nil {
+				return err
+			}
+			if agentFlags.NArg() != 0 {
+				return fmt.Errorf("ttl-agent status does not accept positional arguments: %v", agentFlags.Args())
+			}
+
+			runner := usecase.TTLAgent{
+				FileSystem:    infra.OSFileSystem{},
+				CommandRunner: infra.ExecCommandRunner{},
+				Stdout:        stdout,
+				UserID:        strconv.Itoa(os.Getuid()),
+				Label:         label,
+			}
+			return runner.Status()
+		default:
+			return fmt.Errorf("unsupported ttl-agent arguments: %v", args[1:])
+		}
 	default:
 		return fmt.Errorf("unsupported arguments: %v", args)
 	}
+}
+
+func defaultTTLAgent(stdout io.Writer) (usecase.TTLAgent, error) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return usecase.TTLAgent{}, fmt.Errorf("resolve executable path: %w", err)
+	}
+	return usecase.TTLAgent{
+		FileSystem:      infra.OSFileSystem{},
+		CommandRunner:   infra.ExecCommandRunner{},
+		Stdout:          stdout,
+		ExecutablePath:  executablePath,
+		UserID:          strconv.Itoa(os.Getuid()),
+		IntervalSeconds: 60,
+	}, nil
+}
+
+func withStateLock(run func() error) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
+	lockDir := filepath.Join(homeDir, ".veil")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		return fmt.Errorf("create state lock directory: %w", err)
+	}
+	lockFile, err := os.OpenFile(filepath.Join(lockDir, "state.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("open state lock: %w", err)
+	}
+	defer func() {
+		_ = lockFile.Close()
+	}()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("acquire state lock: %w", err)
+	}
+	defer func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	}()
+
+	return run()
 }
 
 func stdinIsTerminal() bool {
