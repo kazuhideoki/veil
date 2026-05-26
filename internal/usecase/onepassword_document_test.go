@@ -342,6 +342,86 @@ func TestUpdateTargetRequiresActiveOnePasswordLease(t *testing.T) {
 	}
 }
 
+func TestStatusTargetsShowsRemainingTTLForMaterializedOnePasswordTarget(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	documentData := []byte("TOKEN=test\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(documentData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, documentData, 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	resolvedTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(2*time.Hour+30*time.Minute), onePasswordStoreID, resolvedTargetPath, "item-1", sha256Hex(documentData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	var stdout bytes.Buffer
+	uc := StatusTargets{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &stdout,
+		Now:        func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	for _, want := range []string{"materialized", "ttl=2h30m0s", ".env"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestStatusTargetsShowsRemainingTTLForModifiedOnePasswordTarget(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldData := []byte("TOKEN=old\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(oldData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, []byte("TOKEN=new\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	resolvedTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(45*time.Minute), onePasswordStoreID, resolvedTargetPath, "item-1", sha256Hex(oldData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	var stdout bytes.Buffer
+	uc := StatusTargets{
+		FileSystem: infra.OSFileSystem{},
+		Stdout:     &stdout,
+		Now:        func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	for _, want := range []string{"modified", "ttl=45m0s", ".env"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
 func TestUpdateTargetRejectsSymlinkWorkspaceTarget(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)

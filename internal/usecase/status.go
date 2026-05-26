@@ -115,60 +115,80 @@ func writeAllWorkspaceTargetStatus(w io.Writer, fs statusFileSystem, config doma
 			if err != nil {
 				return fmt.Errorf("%s/%s: %w", workspaceID, target, err)
 			}
-			fmt.Fprintf(w, "  %-*s  %-16s  %s\n", width, workspaceID, status, target)
+			if status.TTLRemaining != "" {
+				fmt.Fprintf(w, "  %-*s  %-16s  ttl=%-10s  %s\n", width, workspaceID, status.State, status.TTLRemaining, target)
+				continue
+			}
+			fmt.Fprintf(w, "  %-*s  %-16s  %s\n", width, workspaceID, status.State, target)
 		}
 	}
 	return nil
 }
 
-func detectWorkspaceTargetStatus(fs statusFileSystem, config domain.Config, state domain.State, workspaceID string, workspace domain.Workspace, target string, now time.Time) (string, error) {
+type workspaceTargetStatus struct {
+	State        string
+	TTLRemaining string
+}
+
+func detectWorkspaceTargetStatus(fs statusFileSystem, config domain.Config, state domain.State, workspaceID string, workspace domain.Workspace, target string, now time.Time) (workspaceTargetStatus, error) {
 	workspaceTargetPath := filepath.Join(workspace.Root, target)
 	return detectOnePasswordTargetStatus(fs, config, state, workspaceID, target, workspaceTargetPath, now)
 }
 
-func detectOnePasswordTargetStatus(fs statusFileSystem, config domain.Config, state domain.State, workspaceID, target, workspaceTargetPath string, now time.Time) (string, error) {
+func detectOnePasswordTargetStatus(fs statusFileSystem, config domain.Config, state domain.State, workspaceID, target, workspaceTargetPath string, now time.Time) (workspaceTargetStatus, error) {
 	document, ok, err := config.DocumentForTarget(workspaceID, target)
 	if err != nil {
-		return "", err
+		return workspaceTargetStatus{}, err
 	}
 	if !ok {
-		return "missing-document", nil
+		return workspaceTargetStatus{State: "missing-document"}, nil
 	}
 
 	info, err := fs.Lstat(workspaceTargetPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "absent", nil
+			return workspaceTargetStatus{State: "absent"}, nil
 		}
-		return "", fmt.Errorf("stat workspace target: %w", err)
+		return workspaceTargetStatus{}, fmt.Errorf("stat workspace target: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return "shadowed", nil
+		return workspaceTargetStatus{State: "shadowed"}, nil
 	}
 
 	lease, ok, err := state.FindLease(workspaceID, target)
 	if err != nil {
-		return "", err
+		return workspaceTargetStatus{}, err
 	}
 	if !ok || lease.StoreID != onePasswordStoreID || lease.StorePath != document.ItemID || lease.PlaintextHash == "" {
-		return "untracked", nil
+		return workspaceTargetStatus{State: "untracked"}, nil
 	}
 	if !lease.ExpiresAt.After(now) {
-		return "expired", nil
+		return workspaceTargetStatus{State: "expired"}, nil
 	}
 	if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
-		return "untracked", nil
+		return workspaceTargetStatus{State: "untracked"}, nil
 	}
 
+	ttlRemaining := formatTTLRemaining(lease.ExpiresAt.Sub(now))
 	data, err := fs.ReadFile(workspaceTargetPath)
 	if err != nil {
-		return "", fmt.Errorf("read workspace target: %w", err)
+		return workspaceTargetStatus{}, fmt.Errorf("read workspace target: %w", err)
 	}
 	sum := sha256.Sum256(data)
 	if hex.EncodeToString(sum[:]) != lease.PlaintextHash {
-		return "modified", nil
+		return workspaceTargetStatus{State: "modified", TTLRemaining: ttlRemaining}, nil
 	}
-	return "materialized", nil
+	return workspaceTargetStatus{State: "materialized", TTLRemaining: ttlRemaining}, nil
+}
+
+func formatTTLRemaining(remaining time.Duration) string {
+	if remaining <= 0 {
+		return "0s"
+	}
+	if remaining < time.Second {
+		return "1s"
+	}
+	return remaining.Truncate(time.Second).String()
 }
 
 type statusStateFileSystem struct {
