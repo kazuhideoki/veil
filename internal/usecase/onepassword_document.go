@@ -19,6 +19,7 @@ type OnePasswordDocumentRuntime interface {
 	CreateDocument(vault, title string, tags []string, data []byte) (string, error)
 	ReadDocument(vault, itemID string) ([]byte, error)
 	UpdateDocument(vault, itemID string, data []byte) error
+	DeleteDocument(vault, itemID string) error
 }
 
 type onePasswordDocumentAuthenticator interface {

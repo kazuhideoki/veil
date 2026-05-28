@@ -6,22 +6,25 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/kazuhideoki/veil/internal/domain"
 )
 
 type RemoveWorkspace struct {
-	FileSystem  removeFileSystem
-	Stdout      io.Writer
-	WorkspaceID string
+	FileSystem      removeFileSystem
+	DocumentRuntime OnePasswordDocumentRuntime
+	Stdout          io.Writer
+	WorkspaceID     string
 }
 
 type PurgeWorkspace struct {
-	FileSystem  removeFileSystem
-	Stdin       io.Reader
-	Stdout      io.Writer
-	Interactive bool
-	AssumeYes   bool
+	FileSystem      removeFileSystem
+	DocumentRuntime OnePasswordDocumentRuntime
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Interactive     bool
+	AssumeYes       bool
 }
 
 func (u RemoveWorkspace) Run() error {
@@ -87,12 +90,18 @@ func (u RemoveWorkspace) removeRegisteredWorkspaceByID() error {
 }
 
 func (u RemoveWorkspace) removeOnePasswordWorkspace(ctx activeWorkspaceContext) error {
-	for _, target := range ctx.workspace.Targets {
-		workspaceTargetPath := filepath.Join(ctx.workspace.Root, target)
-		if _, err := u.FileSystem.Lstat(workspaceTargetPath); err == nil {
-			return fmt.Errorf("workspace target still exists: %s; run veil vanish before workspace remove", target)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("stat workspace target: %w", err)
+	if err := requireOnePasswordRuntime(u.DocumentRuntime); err != nil {
+		return err
+	}
+
+	targets := append([]string(nil), ctx.workspace.Targets...)
+	for _, target := range targets {
+		targetPath, document, workspaceTargetPath, err := resolveOnePasswordTarget(&ctx, target)
+		if err != nil {
+			return err
+		}
+		if err := ensureWorkspacePlaintextMatchesDocument(u.FileSystem, u.DocumentRuntime, ctx.config, document, targetPath, workspaceTargetPath); err != nil {
+			return err
 		}
 	}
 
@@ -117,7 +126,7 @@ func requireWorkspaceRootMissing(fs removeFileSystem, workspaceID, root string) 
 	info, err := fs.Stat(root)
 	if err == nil {
 		if info.IsDir() {
-			return fmt.Errorf("workspace root exists: %s; run veil workspace remove from that workspace after veil vanish", root)
+			return fmt.Errorf("workspace root exists: %s; run veil workspace remove from that workspace", root)
 		}
 		return fmt.Errorf("workspace root path exists and is not a directory: %s", root)
 	}
@@ -135,16 +144,72 @@ func (u PurgeWorkspace) Run() error {
 	if err := requireOnePasswordConfig(ctx.config); err != nil {
 		return err
 	}
+	if err := requireOnePasswordRuntime(u.DocumentRuntime); err != nil {
+		return err
+	}
 
 	if err := u.confirm(ctx.workspaceID, len(ctx.workspace.Targets)); err != nil {
 		return err
 	}
 
-	remover := RemoveWorkspace{FileSystem: u.FileSystem, Stdout: u.Stdout}
-	if err := remover.removeOnePasswordWorkspace(ctx); err != nil {
+	if err := u.purgeOnePasswordWorkspace(ctx); err != nil {
 		return err
 	}
 	fmt.Fprintf(u.Stdout, "purged workspace: %s\n", ctx.workspaceID)
+	return nil
+}
+
+type workspacePurgeTarget struct {
+	document              domain.DocumentConfig
+	workspaceTargetPath   string
+	removeWorkspaceTarget bool
+}
+
+func (u PurgeWorkspace) purgeOnePasswordWorkspace(ctx activeWorkspaceContext) error {
+	targets := append([]string(nil), ctx.workspace.Targets...)
+	purgeTargets := make([]workspacePurgeTarget, 0, len(targets))
+	for _, target := range targets {
+		targetPath, document, workspaceTargetPath, err := resolveOnePasswordTarget(&ctx, target)
+		if err != nil {
+			return err
+		}
+		removeWorkspaceTarget, err := validateWorkspaceTargetBeforePurge(u.FileSystem, u.DocumentRuntime, ctx.config, document, targetPath, workspaceTargetPath)
+		if err != nil {
+			return err
+		}
+		purgeTargets = append(purgeTargets, workspacePurgeTarget{
+			document:              document,
+			workspaceTargetPath:   workspaceTargetPath,
+			removeWorkspaceTarget: removeWorkspaceTarget,
+		})
+	}
+
+	for _, target := range purgeTargets {
+		if !target.removeWorkspaceTarget {
+			continue
+		}
+		if err := removeMaterializedTarget(u.FileSystem, target.workspaceTargetPath); err != nil {
+			return err
+		}
+	}
+
+	if err := ctx.config.RemoveWorkspace(ctx.workspaceID); err != nil {
+		return err
+	}
+	if err := ctx.config.RemoveWorkspaceDocuments(ctx.workspaceID); err != nil {
+		return err
+	}
+	if err := ctx.persistRenderedConfig(u.FileSystem, u.Stdout); err != nil {
+		return err
+	}
+	if err := clearWorkspaceLeases(u.FileSystem, ctx.workspaceID); err != nil {
+		return err
+	}
+	for _, target := range purgeTargets {
+		if err := u.DocumentRuntime.DeleteDocument(onePasswordVault(ctx.config, target.document), target.document.ItemID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

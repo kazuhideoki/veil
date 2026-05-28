@@ -52,9 +52,10 @@ func mustUpsertLease(t *testing.T, state *domain.State, workspaceID, target stri
 }
 
 type failingStateWriteFS struct {
-	homeDir       string
-	stateWriteErr error
-	renameErr     error
+	homeDir        string
+	configWriteErr error
+	stateWriteErr  error
+	renameErr      error
 }
 
 func (fs failingStateWriteFS) UserHomeDir() (string, error) {
@@ -78,6 +79,9 @@ func (fs failingStateWriteFS) ReadFile(name string) ([]byte, error) {
 }
 
 func (fs failingStateWriteFS) WriteFile(name string, data []byte, perm os.FileMode) error {
+	if strings.Contains(name, filepath.Join(".veil", "config.toml")) && fs.configWriteErr != nil {
+		return fs.configWriteErr
+	}
 	if strings.Contains(name, filepath.Join(".veil", "state.toml")) {
 		return fs.stateWriteErr
 	}

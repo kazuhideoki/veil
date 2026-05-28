@@ -110,6 +110,18 @@ func (OnePasswordDocumentRuntime) UpdateDocument(vault, itemID string, data []by
 	return nil
 }
 
+func (OnePasswordDocumentRuntime) DeleteDocument(vault, itemID string) error {
+	output, err := exec.Command("op", "document", "delete", itemID, "--vault", vault).CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("failed to delete 1Password document: %s", message)
+	}
+	return nil
+}
+
 func itemIDFromJSON(data []byte) (string, error) {
 	var item struct {
 		ID     string `json:"id"`

@@ -133,15 +133,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.RemoveTarget{
-			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
-			TargetPath: removeFlags.Arg(0),
+			FileSystem:      infra.OSFileSystem{},
+			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+			Stdout:          stdout,
+			TargetPath:      removeFlags.Arg(0),
 		}
 
 		return withStateLock(runner.Run)
 	case "purge":
 		purgeFlags := flag.NewFlagSet("purge", flag.ContinueOnError)
 		purgeFlags.SetOutput(stderr)
+
+		var assumeYes bool
+		purgeFlags.BoolVar(&assumeYes, "yes", false, "skip confirmation")
 
 		if err := purgeFlags.Parse(args[1:]); err != nil {
 			return err
@@ -152,9 +156,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		runner := usecase.PurgeTarget{
-			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
-			TargetPath: purgeFlags.Arg(0),
+			FileSystem:      infra.OSFileSystem{},
+			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+			Stdin:           os.Stdin,
+			Stdout:          stdout,
+			Interactive:     stdinIsTerminal(),
+			AssumeYes:       assumeYes,
+			TargetPath:      purgeFlags.Arg(0),
 		}
 
 		return withStateLock(runner.Run)
@@ -180,9 +188,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 
 			runner := usecase.RemoveWorkspace{
-				FileSystem:  infra.OSFileSystem{},
-				Stdout:      stdout,
-				WorkspaceID: workspaceID,
+				FileSystem:      infra.OSFileSystem{},
+				DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+				Stdout:          stdout,
+				WorkspaceID:     workspaceID,
 			}
 
 			return withStateLock(runner.Run)
@@ -202,11 +211,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 
 			runner := usecase.PurgeWorkspace{
-				FileSystem:  infra.OSFileSystem{},
-				Stdin:       os.Stdin,
-				Stdout:      stdout,
-				Interactive: stdinIsTerminal(),
-				AssumeYes:   assumeYes,
+				FileSystem:      infra.OSFileSystem{},
+				DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+				Stdin:           os.Stdin,
+				Stdout:          stdout,
+				Interactive:     stdinIsTerminal(),
+				AssumeYes:       assumeYes,
 			}
 
 			return withStateLock(runner.Run)

@@ -658,6 +658,327 @@ func TestVanishOnePasswordDocumentRefusesUncommittedChanges(t *testing.T) {
 	}
 }
 
+func TestRemoveTargetRestoresWorkspaceFileAndKeepsOnePasswordDocument(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	var stdout bytes.Buffer
+	uc := RemoveTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &stdout,
+		TargetPath:      ".env",
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	workspaceData, err := os.ReadFile(filepath.Join(workspaceRoot, ".env"))
+	if err != nil {
+		t.Fatalf("ReadFile(workspace target) returned error: %v", err)
+	}
+	if string(workspaceData) != "TOKEN=test\n" {
+		t.Fatalf("workspace data = %q", string(workspaceData))
+	}
+	if got := string(runtime.documents["item-1"]); got != "TOKEN=test\n" {
+		t.Fatalf("1Password document was changed, data = %q", got)
+	}
+	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	for _, unwanted := range []string{`target = ".env"`, `item_id = "item-1"`, `targets = [".env"]`} {
+		if strings.Contains(string(configData), unwanted) {
+			t.Fatalf("config = %q, unwanted %q", string(configData), unwanted)
+		}
+	}
+}
+
+func TestRemoveTargetRefusesWorkspaceFileThatDiffersFromOnePasswordDocument(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=remote\n")))
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=local\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
+	uc := RemoveTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		TargetPath:      ".env",
+	}
+
+	err := uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "differs from 1Password document") {
+		t.Fatalf("error = %q", err)
+	}
+	configData, readErr := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if readErr != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", readErr)
+	}
+	if !strings.Contains(string(configData), `target = ".env"`) {
+		t.Fatalf("config = %q, want target to remain registered", string(configData))
+	}
+}
+
+func TestPurgeTargetDeletesOnePasswordDocumentAndWorkspaceFile(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, []byte("TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	uc := PurgeTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		AssumeYes:       true,
+		TargetPath:      ".env",
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if _, ok := runtime.documents["item-1"]; ok {
+		t.Fatal("1Password document still exists")
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("workspace target still exists, err=%v", err)
+	}
+	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	if strings.Contains(string(configData), `target = ".env"`) {
+		t.Fatalf("config = %q, target still registered", string(configData))
+	}
+}
+
+func TestPurgeTargetRequiresConfirmationWhenNonInteractive(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	uc := PurgeTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		TargetPath:      ".env",
+	}
+
+	err := uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "target purge requires --yes") {
+		t.Fatalf("error = %q", err)
+	}
+	if _, ok := runtime.documents["item-1"]; !ok {
+		t.Fatal("1Password document was deleted")
+	}
+}
+
+func TestPurgeTargetDoesNotDeleteOnePasswordDocumentWhenConfigWriteFails(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, []byte("TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	uc := PurgeTarget{
+		FileSystem: failingStateWriteFS{
+			homeDir:        tempHome,
+			configWriteErr: errors.New("config write failed"),
+		},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		AssumeYes:       true,
+		TargetPath:      ".env",
+	}
+
+	err := uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "config write failed") {
+		t.Fatalf("error = %q", err)
+	}
+	if _, ok := runtime.documents["item-1"]; !ok {
+		t.Fatal("1Password document was deleted")
+	}
+}
+
+func TestWorkspaceRemoveRestoresAllWorkspaceFilesAndKeepsOnePasswordDocuments(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env", "config/app.json"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	appendDocumentConfig(t, tempHome, "config/app.json", "item-2", sha256Hex([]byte("{\"key\":\"value\"}\n")))
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	runtime.documents["item-2"] = []byte("{\"key\":\"value\"}\n")
+	uc := RemoveWorkspace{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	for target, want := range map[string]string{
+		".env":            "TOKEN=test\n",
+		"config/app.json": "{\"key\":\"value\"}\n",
+	} {
+		data, err := os.ReadFile(filepath.Join(workspaceRoot, target))
+		if err != nil {
+			t.Fatalf("ReadFile(%q) returned error: %v", target, err)
+		}
+		if string(data) != want {
+			t.Fatalf("%s data = %q", target, string(data))
+		}
+	}
+	if len(runtime.deleted) != 0 {
+		t.Fatalf("deleted documents = %v, want none", runtime.deleted)
+	}
+	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	if strings.Contains(string(configData), `[workspaces.myapp]`) || strings.Contains(string(configData), `[[documents]]`) {
+		t.Fatalf("config = %q, workspace or documents still registered", string(configData))
+	}
+}
+
+func TestWorkspacePurgeDeletesOnePasswordDocumentsAndWorkspaceFiles(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env", "config/app.json"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	appendDocumentConfig(t, tempHome, "config/app.json", "item-2", sha256Hex([]byte("{\"key\":\"value\"}\n")))
+	for target, data := range map[string][]byte{
+		".env":            []byte("TOKEN=test\n"),
+		"config/app.json": []byte("{\"key\":\"value\"}\n"),
+	} {
+		path := filepath.Join(workspaceRoot, target)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatalf("WriteFile() returned error: %v", err)
+		}
+	}
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	runtime.documents["item-2"] = []byte("{\"key\":\"value\"}\n")
+	uc := PurgeWorkspace{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		AssumeYes:       true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if len(runtime.documents) != 0 {
+		t.Fatalf("documents = %v, want none", runtime.documents)
+	}
+	for _, target := range []string{".env", "config/app.json"} {
+		if _, err := os.Stat(filepath.Join(workspaceRoot, target)); !os.IsNotExist(err) {
+			t.Fatalf("workspace target %q still exists, err=%v", target, err)
+		}
+	}
+}
+
+func TestWorkspacePurgeDoesNotDeleteOnePasswordDocumentsWhenConfigWriteFails(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env", "config/app.json"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	appendDocumentConfig(t, tempHome, "config/app.json", "item-2", sha256Hex([]byte("{\"key\":\"value\"}\n")))
+	for target, data := range map[string][]byte{
+		".env":            []byte("TOKEN=test\n"),
+		"config/app.json": []byte("{\"key\":\"value\"}\n"),
+	} {
+		path := filepath.Join(workspaceRoot, target)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll() returned error: %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatalf("WriteFile() returned error: %v", err)
+		}
+	}
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	runtime.documents["item-2"] = []byte("{\"key\":\"value\"}\n")
+	uc := PurgeWorkspace{
+		FileSystem: failingStateWriteFS{
+			homeDir:        tempHome,
+			configWriteErr: errors.New("config write failed"),
+		},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		AssumeYes:       true,
+	}
+
+	err := uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "config write failed") {
+		t.Fatalf("error = %q", err)
+	}
+	for _, itemID := range []string{"item-1", "item-2"} {
+		if _, ok := runtime.documents[itemID]; !ok {
+			t.Fatalf("1Password document %q was deleted", itemID)
+		}
+	}
+}
+
 func TestRunTTLCleanerRemovesExpiredCleanOnePasswordMaterializedFile(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
@@ -789,6 +1110,7 @@ func chdirForTest(t *testing.T, path string) func() {
 
 type fakeOnePasswordRuntime struct {
 	documents    map[string][]byte
+	deleted      []string
 	nextID       int
 	createdTitle string
 	createdTags  []string
@@ -849,6 +1171,12 @@ func (f *fakeOnePasswordRuntime) UpdateDocument(vault, itemID string, data []byt
 	return nil
 }
 
+func (f *fakeOnePasswordRuntime) DeleteDocument(vault, itemID string) error {
+	delete(f.documents, itemID)
+	f.deleted = append(f.deleted, itemID)
+	return nil
+}
+
 func (b *blockingOnePasswordRuntime) CreateDocument(vault, title string, tags []string, data []byte) (string, error) {
 	return "", errors.New("unexpected create document")
 }
@@ -894,6 +1222,10 @@ func (b *blockingOnePasswordRuntime) ReadDocument(vault, itemID string) ([]byte,
 
 func (b *blockingOnePasswordRuntime) UpdateDocument(vault, itemID string, data []byte) error {
 	return errors.New("unexpected update document")
+}
+
+func (b *blockingOnePasswordRuntime) DeleteDocument(vault, itemID string) error {
+	return errors.New("unexpected delete document")
 }
 
 func (b *blockingOnePasswordRuntime) maxConcurrentReads() int {

@@ -54,6 +54,18 @@ veil vanish
 # remove materialized files from every registered workspace
 veil vanish --all
 
+# stop managing a target and keep it as a normal workspace file
+veil remove .env
+
+# permanently delete a target from Veil and 1Password
+veil purge --yes .env
+
+# stop managing the current workspace and keep its targets as normal files
+veil workspace remove
+
+# permanently delete the current workspace's targets from Veil and 1Password
+veil workspace purge --yes
+
 # manually repair or change the background cleanup interval
 veil ttl-agent install --interval 60
 ```
