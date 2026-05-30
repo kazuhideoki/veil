@@ -183,12 +183,17 @@ func detectOnePasswordTargetStatus(fs statusFileSystem, config domain.Config, st
 
 func formatTTLRemaining(remaining time.Duration) string {
 	if remaining <= 0 {
-		return "0s"
+		return "00h00m00s"
 	}
 	if remaining < time.Second {
-		return "1s"
+		return "00h00m01s"
 	}
-	return remaining.Truncate(time.Second).String()
+
+	totalSeconds := int64(remaining.Truncate(time.Second).Seconds())
+	hours := totalSeconds / 3600
+	minutes := (totalSeconds % 3600) / 60
+	seconds := totalSeconds % 60
+	return fmt.Sprintf("%02dh%02dm%02ds", hours, minutes, seconds)
 }
 
 type statusStateFileSystem struct {

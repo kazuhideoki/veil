@@ -375,7 +375,7 @@ func TestStatusTargetsShowsRemainingTTLForMaterializedOnePasswordTarget(t *testi
 	if err := uc.Run(); err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
-	for _, want := range []string{"materialized", "ttl=2h30m0s", ".env"} {
+	for _, want := range []string{"materialized", "ttl=02h30m00s", ".env"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 		}
@@ -415,7 +415,7 @@ func TestStatusTargetsShowsRemainingTTLForModifiedOnePasswordTarget(t *testing.T
 	if err := uc.Run(); err != nil {
 		t.Fatalf("Run() returned error: %v", err)
 	}
-	for _, want := range []string{"modified", "ttl=45m0s", ".env"} {
+	for _, want := range []string{"modified", "ttl=00h45m00s", ".env"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 		}
