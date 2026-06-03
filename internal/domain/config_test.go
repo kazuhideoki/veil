@@ -52,6 +52,33 @@ func TestRenderTOMLQuotesWorkspaceID(t *testing.T) {
 	}
 }
 
+func TestRenderTOMLOmitsLegacyDocumentContentHash(t *testing.T) {
+	config := DefaultConfig()
+	config.Documents = []DocumentConfig{
+		{
+			WorkspaceID:   "myapp",
+			Target:        ".env",
+			ItemID:        "item-1",
+			Vault:         "Private",
+			Title:         "Veil: myapp: .env",
+			ContentSHA256: "legacy-hash",
+		},
+	}
+
+	data, err := config.RenderTOML()
+	if err != nil {
+		t.Fatalf("RenderTOML() returned error: %v", err)
+	}
+
+	rendered := string(data)
+	if strings.Contains(rendered, "content_sha256") || strings.Contains(rendered, "legacy-hash") {
+		t.Fatalf("rendered = %q", rendered)
+	}
+	if !strings.Contains(rendered, `item_id = "item-1"`) {
+		t.Fatalf("rendered = %q", rendered)
+	}
+}
+
 func TestWorkspaceAddTargetRejectsWorkspaceEscape(t *testing.T) {
 	workspace := Workspace{}
 

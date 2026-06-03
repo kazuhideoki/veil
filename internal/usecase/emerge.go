@@ -157,8 +157,7 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 			}
 
 			hash := sha256Hex(data)
-			if document.ContentSHA256 != hash || document.Vault != vault {
-				document.ContentSHA256 = hash
+			if document.Vault != vault {
 				document.Vault = vault
 				if err := config.UpsertDocument(document); err != nil {
 					return err
@@ -382,8 +381,8 @@ func runEmergeOnePasswordTask(fs emergeFileSystem, runtime OnePasswordDocumentRu
 	result.created = created
 
 	hash := sha256Hex(data)
-	if result.document.ContentSHA256 != hash || result.document.Vault != task.vault {
-		result.document.ContentSHA256 = hash
+	result.document.ContentSHA256 = hash
+	if result.document.Vault != task.vault {
 		result.document.Vault = task.vault
 		result.configChanged = true
 	}

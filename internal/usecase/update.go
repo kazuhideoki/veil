@@ -94,7 +94,7 @@ func (u UpdateTarget) Run() error {
 	if err != nil {
 		return err
 	}
-	updatedDocument, changed, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, workspaceData)
+	updatedDocument, changed, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, workspaceData, lease.PlaintextHash)
 	if err != nil {
 		return fmt.Errorf("%s: %w", targetPath, err)
 	}
@@ -116,7 +116,7 @@ func (u UpdateTarget) Run() error {
 	if err := persistState(u.FileSystem, statePath, state); err != nil {
 		return err
 	}
-	if changed || updatedDocument.ContentSHA256 != document.ContentSHA256 || updatedDocument.Vault != document.Vault {
+	if updatedDocument.Vault != document.Vault {
 		configData, err := config.RenderTOML()
 		if err != nil {
 			return err

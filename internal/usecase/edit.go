@@ -138,8 +138,8 @@ func (u EditTarget) editOnePasswordDocument(config domain.Config) error {
 		}
 	}
 
-	document.ContentSHA256 = sha256Hex(data)
-	updatedDocument, _, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, editedData)
+	baselineHash := sha256Hex(data)
+	updatedDocument, _, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, editedData, baselineHash)
 	if err != nil {
 		return fmt.Errorf("%s: %w", targetPath, err)
 	}
@@ -160,12 +160,15 @@ func (u EditTarget) editOnePasswordDocument(config domain.Config) error {
 		}
 	}
 
-	configPath, _, err := loadConfig(u.FileSystem)
-	if err != nil {
-		return err
-	}
 	updatedDocument.Vault = vault
 	if err := config.UpsertDocument(updatedDocument); err != nil {
+		return err
+	}
+	if updatedDocument.Vault == document.Vault {
+		return nil
+	}
+	configPath, _, err := loadConfig(u.FileSystem)
+	if err != nil {
 		return err
 	}
 	configData, err := config.RenderTOML()

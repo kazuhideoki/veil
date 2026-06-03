@@ -110,7 +110,6 @@ target = ".env"
 item_id = "op-item-id"
 vault = "Personal"
 title = "Veil: myapp: .env"
-content_sha256 = "..."
 ```
 
 ## Development

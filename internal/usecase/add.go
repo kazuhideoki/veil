@@ -140,12 +140,11 @@ func (u AddTarget) addOnePasswordDocuments(configPath string, config domain.Conf
 			return fmt.Errorf("create 1Password document: %w", err)
 		}
 		createdDocuments = append(createdDocuments, domain.DocumentConfig{
-			WorkspaceID:   workspaceID,
-			Target:        candidate.targetPath,
-			ItemID:        itemID,
-			Vault:         vault,
-			Title:         title,
-			ContentSHA256: sha256Hex(candidate.storeData),
+			WorkspaceID: workspaceID,
+			Target:      candidate.targetPath,
+			ItemID:      itemID,
+			Vault:       vault,
+			Title:       title,
 		})
 	}
 

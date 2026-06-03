@@ -106,9 +106,6 @@ func (c Config) RenderTOML() ([]byte, error) {
 		if document.Title != "" {
 			fmt.Fprintf(&builder, "title = %s\n", strconv.Quote(document.Title))
 		}
-		if document.ContentSHA256 != "" {
-			fmt.Fprintf(&builder, "content_sha256 = %s\n", strconv.Quote(document.ContentSHA256))
-		}
 	}
 
 	ids := make([]string, 0, len(c.Workspaces))

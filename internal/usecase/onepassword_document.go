@@ -193,7 +193,7 @@ func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID
 	return false, nil
 }
 
-func updateOnePasswordDocument(runtime OnePasswordDocumentRuntime, config domain.Config, document domain.DocumentConfig, workspaceData []byte) (domain.DocumentConfig, bool, error) {
+func updateOnePasswordDocument(runtime OnePasswordDocumentRuntime, config domain.Config, document domain.DocumentConfig, workspaceData []byte, baselineHash string) (domain.DocumentConfig, bool, error) {
 	vault := onePasswordVault(config, document)
 	remoteData, err := runtime.ReadDocument(vault, document.ItemID)
 	if err != nil {
@@ -201,7 +201,10 @@ func updateOnePasswordDocument(runtime OnePasswordDocumentRuntime, config domain
 	}
 	remoteHash := sha256Hex(remoteData)
 	localHash := sha256Hex(workspaceData)
-	if document.ContentSHA256 != "" && remoteHash != document.ContentSHA256 && remoteHash != localHash {
+	if baselineHash == "" {
+		baselineHash = document.ContentSHA256
+	}
+	if baselineHash != "" && remoteHash != baselineHash && remoteHash != localHash {
 		return document, false, fmt.Errorf("1Password document changed since last Veil sync")
 	}
 	if localHash == remoteHash {

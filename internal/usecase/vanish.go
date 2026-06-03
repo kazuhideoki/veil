@@ -157,14 +157,14 @@ func (u VanishTargets) vanishOnePasswordDocuments(config domain.Config, statePat
 				if err != nil {
 					return err
 				}
-				updatedDocument, changed, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, data)
+				updatedDocument, _, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, data, lease.PlaintextHash)
 				if err != nil {
 					return fmt.Errorf("%s: %w", target, err)
 				}
 				if err := config.UpsertDocument(updatedDocument); err != nil {
 					return err
 				}
-				if changed || updatedDocument.ContentSHA256 != document.ContentSHA256 {
+				if updatedDocument.Vault != document.Vault {
 					configChanged = true
 				}
 				if err := updateLeaseHash(&state, entry.id, target, workspaceTargetPath, updatedDocument.ItemID, updatedDocument.ContentSHA256, now, ttl); err != nil {

@@ -301,12 +301,12 @@ func TestUpdateTargetCommitsMaterializedOnePasswordDocument(t *testing.T) {
 	if got := string(runtime.documents["item-1"]); got != "TOKEN=new\n" {
 		t.Fatalf("document data = %q", got)
 	}
-	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	stateData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "state.toml"))
 	if err != nil {
-		t.Fatalf("ReadFile(config) returned error: %v", err)
+		t.Fatalf("ReadFile(state) returned error: %v", err)
 	}
-	if !strings.Contains(string(configData), sha256Hex([]byte("TOKEN=new\n"))) {
-		t.Fatalf("config = %q", string(configData))
+	if !strings.Contains(string(stateData), `plaintext_sha256 = "`+sha256Hex([]byte("TOKEN=new\n"))+`"`) {
+		t.Fatalf("state = %q", string(stateData))
 	}
 }
 
