@@ -27,6 +27,7 @@ type UpdateTarget struct {
 	Stdout          io.Writer
 	TargetPath      string
 	Now             func() time.Time
+	OverwriteRemote bool
 }
 
 func (u UpdateTarget) Run() error {
@@ -94,7 +95,9 @@ func (u UpdateTarget) Run() error {
 	if err != nil {
 		return err
 	}
-	updatedDocument, changed, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, workspaceData, lease.PlaintextHash)
+	updatedDocument, changed, err := updateOnePasswordDocumentWithOptions(u.DocumentRuntime, config, document, workspaceData, lease.PlaintextHash, updateOnePasswordOptions{
+		OverwriteRemote: u.OverwriteRemote,
+	})
 	if err != nil {
 		return fmt.Errorf("%s: %w", targetPath, err)
 	}
@@ -125,6 +128,6 @@ func (u UpdateTarget) Run() error {
 			return fmt.Errorf("write config file: %w", err)
 		}
 	}
-	writeUpdatedTarget(u.Stdout, targetPath, changed)
+	writeUpdatedTarget(u.Stdout, targetPath, changed, u.OverwriteRemote)
 	return nil
 }

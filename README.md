@@ -45,8 +45,14 @@ veil emerge
 # edit the source document safely
 veil edit .env
 
+# inspect local materialized edits before committing them
+veil diff .env
+
 # commit materialized edits back to 1Password
 veil update .env
+
+# explicitly overwrite a remotely changed 1Password document after resolving a conflict
+veil update --overwrite-remote .env
 
 # remove materialized files from the workspace
 veil vanish
@@ -73,6 +79,24 @@ veil ttl-agent install --interval 60
 ## TTL Cleanup
 
 `default_ttl` controls how long a materialized file lease is valid. Expired clean files are removed by `veil ttl-cleaner`, and modified files are kept so local edits are not lost.
+
+## Reviewing Materialized Edits
+
+`veil status` shows a materialized target as `modified` when the workspace file no longer matches the last Veil sync hash. Use `veil diff` before committing the edit:
+
+```bash
+veil diff
+veil diff .env
+veil diff --summary
+```
+
+`veil diff` compares the workspace file with the current 1Password document. If both sides changed since the last Veil sync, Veil reports a conflict. In that case, `veil update .env` and `veil vanish --commit` refuse to overwrite 1Password implicitly. Review the diff, edit the workspace file to the desired final contents, then explicitly overwrite the remote document:
+
+```bash
+veil diff .env
+veil update --overwrite-remote .env
+veil vanish
+```
 
 `veil emerge` automatically installs and loads the macOS LaunchAgent that runs TTL cleanup in the background. Manual agent commands are available for repair, inspection, and interval changes:
 

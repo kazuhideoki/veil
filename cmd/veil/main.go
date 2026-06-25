@@ -104,6 +104,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		updateFlags := flag.NewFlagSet("update", flag.ContinueOnError)
 		updateFlags.SetOutput(stderr)
 
+		var overwriteRemote bool
+		updateFlags.BoolVar(&overwriteRemote, "overwrite-remote", false, "overwrite a changed 1Password document with the workspace target")
+
 		if err := updateFlags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -117,6 +120,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			TargetPath:      updateFlags.Arg(0),
+			OverwriteRemote: overwriteRemote,
 		}
 
 		return withStateLock(runner.Run)
@@ -306,6 +310,38 @@ func run(args []string, stdout, stderr io.Writer) error {
 		runner := usecase.StatusTargets{
 			FileSystem: infra.OSFileSystem{},
 			Stdout:     stdout,
+		}
+
+		return runner.Run()
+	case "diff":
+		diffFlags := flag.NewFlagSet("diff", flag.ContinueOnError)
+		diffFlags.SetOutput(stderr)
+
+		var allWorkspaces bool
+		var summary bool
+		diffFlags.BoolVar(&allWorkspaces, "all", false, "diff modified targets for all workspaces")
+		diffFlags.BoolVar(&summary, "summary", false, "show only target states")
+
+		if err := diffFlags.Parse(args[1:]); err != nil {
+			return err
+		}
+
+		if diffFlags.NArg() > 1 {
+			return fmt.Errorf("diff accepts at most one target path")
+		}
+
+		targetPath := ""
+		if diffFlags.NArg() == 1 {
+			targetPath = diffFlags.Arg(0)
+		}
+
+		runner := usecase.DiffTargets{
+			FileSystem:      infra.OSFileSystem{},
+			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
+			Stdout:          stdout,
+			TargetPath:      targetPath,
+			AllWorkspaces:   allWorkspaces,
+			Summary:         summary,
 		}
 
 		return runner.Run()

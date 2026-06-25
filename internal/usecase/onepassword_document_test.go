@@ -310,6 +310,218 @@ func TestUpdateTargetCommitsMaterializedOnePasswordDocument(t *testing.T) {
 	}
 }
 
+func TestUpdateTargetRejectsRemoteConflict(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldHash := sha256Hex([]byte("TOKEN=old\n"))
+	appendDocumentConfig(t, tempHome, ".env", "item-1", oldHash)
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=local\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, "", "item-1", oldHash); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
+	uc := UpdateTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		TargetPath:      ".env",
+		Now:             func() time.Time { return now },
+	}
+
+	err := uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "1Password document changed since last Veil sync") {
+		t.Fatalf("error = %q", err)
+	}
+	if got := string(runtime.documents["item-1"]); got != "TOKEN=remote\n" {
+		t.Fatalf("document data = %q", got)
+	}
+}
+
+func TestUpdateTargetOverwriteRemoteCommitsConflict(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldHash := sha256Hex([]byte("TOKEN=old\n"))
+	appendDocumentConfig(t, tempHome, ".env", "item-1", oldHash)
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=local\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, "", "item-1", oldHash); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
+	var stdout bytes.Buffer
+	uc := UpdateTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &stdout,
+		TargetPath:      ".env",
+		Now:             func() time.Time { return now },
+		OverwriteRemote: true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if got := string(runtime.documents["item-1"]); got != "TOKEN=local\n" {
+		t.Fatalf("document data = %q", got)
+	}
+	if got := stdout.String(); got != "overwrote remote target: .env\n" {
+		t.Fatalf("stdout = %q", got)
+	}
+}
+
+func TestDiffTargetsShowsModifiedTargetDiff(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldData := []byte("TOKEN=old\n")
+	oldHash := sha256Hex(oldData)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", oldHash)
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=new\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, "", "item-1", oldHash); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = oldData
+	var stdout bytes.Buffer
+	uc := DiffTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &stdout,
+		Now:             func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	for _, want := range []string{
+		"modified target: .env\n",
+		"diff --veil .env\n",
+		"--- 1password/.env\n",
+		"+++ workspace/.env\n",
+		"-TOKEN=old\n",
+		"+TOKEN=new\n",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestDiffTargetsReportsRemoteConflict(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldHash := sha256Hex([]byte("TOKEN=old\n"))
+	appendDocumentConfig(t, tempHome, ".env", "item-1", oldHash)
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=local\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, "", "item-1", oldHash); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
+	var stdout bytes.Buffer
+	uc := DiffTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &stdout,
+		TargetPath:      ".env",
+		Now:             func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	for _, want := range []string{
+		"conflict target: .env  1Password document changed since last Veil sync\n",
+		"-TOKEN=remote\n",
+		"+TOKEN=local\n",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestWriteUnifiedDiffShowsOnlyNearbyContext(t *testing.T) {
+	var stdout bytes.Buffer
+
+	writeUnifiedDiff(&stdout, ".env", []byte(strings.Join([]string{
+		"LINE=1",
+		"LINE=2",
+		"LINE=3",
+		"TOKEN=old",
+		"LINE=5",
+		"LINE=6",
+		"LINE=7",
+	}, "\n")+"\n"), []byte(strings.Join([]string{
+		"LINE=1",
+		"LINE=2",
+		"LINE=3",
+		"TOKEN=new",
+		"LINE=5",
+		"LINE=6",
+		"LINE=7",
+	}, "\n")+"\n"))
+
+	got := stdout.String()
+	for _, want := range []string{
+		"@@ -2,5 +2,5 @@\n",
+		" LINE=2\n",
+		" LINE=3\n",
+		"-TOKEN=old\n",
+		"+TOKEN=new\n",
+		" LINE=5\n",
+		" LINE=6\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stdout = %q, want %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{" LINE=1\n", " LINE=7\n"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("stdout = %q, did not want %q", got, unwanted)
+		}
+	}
+}
+
 func TestUpdateTargetRequiresActiveOnePasswordLease(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)

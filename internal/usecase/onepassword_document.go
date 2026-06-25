@@ -193,7 +193,15 @@ func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID
 	return false, nil
 }
 
+type updateOnePasswordOptions struct {
+	OverwriteRemote bool
+}
+
 func updateOnePasswordDocument(runtime OnePasswordDocumentRuntime, config domain.Config, document domain.DocumentConfig, workspaceData []byte, baselineHash string) (domain.DocumentConfig, bool, error) {
+	return updateOnePasswordDocumentWithOptions(runtime, config, document, workspaceData, baselineHash, updateOnePasswordOptions{})
+}
+
+func updateOnePasswordDocumentWithOptions(runtime OnePasswordDocumentRuntime, config domain.Config, document domain.DocumentConfig, workspaceData []byte, baselineHash string, options updateOnePasswordOptions) (domain.DocumentConfig, bool, error) {
 	vault := onePasswordVault(config, document)
 	remoteData, err := runtime.ReadDocument(vault, document.ItemID)
 	if err != nil {
@@ -204,7 +212,7 @@ func updateOnePasswordDocument(runtime OnePasswordDocumentRuntime, config domain
 	if baselineHash == "" {
 		baselineHash = document.ContentSHA256
 	}
-	if baselineHash != "" && remoteHash != baselineHash && remoteHash != localHash {
+	if !options.OverwriteRemote && baselineHash != "" && remoteHash != baselineHash && remoteHash != localHash {
 		return document, false, fmt.Errorf("1Password document changed since last Veil sync")
 	}
 	if localHash == remoteHash {
@@ -256,8 +264,12 @@ func updateLeaseHash(state *domain.State, workspaceID, target, workspacePath, it
 	return state.UpsertLeaseWithHash(workspaceID, target, now, now.Add(ttl), onePasswordStoreID, workspacePath, itemID, plaintextHash)
 }
 
-func writeUpdatedTarget(w io.Writer, target string, changed bool) {
+func writeUpdatedTarget(w io.Writer, target string, changed, overwriteRemote bool) {
 	if changed {
+		if overwriteRemote {
+			fmt.Fprintf(w, "overwrote remote target: %s\n", target)
+			return
+		}
 		fmt.Fprintf(w, "updated target: %s\n", target)
 		return
 	}
