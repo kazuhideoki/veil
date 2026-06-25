@@ -145,6 +145,138 @@ func TestEmergeTargetsBackfillsMissingPlaintextHashWhenFileMatchesDocument(t *te
 	}
 }
 
+func TestEmergeTargetsRefreshesExpiredCleanOnePasswordDocument(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldData := []byte("TOKEN=old\n")
+	newData := []byte("TOKEN=new\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(oldData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, oldData, 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	resolvedTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-2*time.Hour), now.Add(-time.Hour), onePasswordStoreID, resolvedTargetPath, "item-1", sha256Hex(oldData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = newData
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		Now:             func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	workspaceData, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("ReadFile(workspace) returned error: %v", err)
+	}
+	if string(workspaceData) != string(newData) {
+		t.Fatalf("workspace data = %q", string(workspaceData))
+	}
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	lease, ok, err := refreshed.FindLease("myapp", ".env")
+	if err != nil {
+		t.Fatalf("FindLease() returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("lease not found")
+	}
+	if !lease.ExpiresAt.Equal(now.Add(24 * time.Hour)) {
+		t.Fatalf("ExpiresAt = %v", lease.ExpiresAt)
+	}
+	if lease.PlaintextHash != sha256Hex(newData) {
+		t.Fatalf("PlaintextHash = %q", lease.PlaintextHash)
+	}
+}
+
+func TestEmergeTargetsReportsExpiredModifiedOnePasswordDocument(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldData := []byte("TOKEN=old\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(oldData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, []byte("TOKEN=local\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	resolvedTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-2*time.Hour), now.Add(-time.Hour), onePasswordStoreID, resolvedTargetPath, "item-1", sha256Hex(oldData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
+	var stdout bytes.Buffer
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &stdout,
+		Now:             func() time.Time { return now },
+	}
+
+	err = uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	if !strings.Contains(err.Error(), "target lease is expired with uncommitted changes") {
+		t.Fatalf("error = %q", err)
+	}
+	for _, want := range []string{
+		"expired modified target: .env",
+		"uncommitted changes kept",
+		"veil diff .env",
+		"veil vanish --commit or --discard",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+	workspaceData, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("ReadFile(workspace) returned error: %v", err)
+	}
+	if string(workspaceData) != "TOKEN=local\n" {
+		t.Fatalf("workspace data = %q", string(workspaceData))
+	}
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	lease, ok, err := refreshed.FindLease("myapp", ".env")
+	if err != nil {
+		t.Fatalf("FindLease() returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("lease not found")
+	}
+	if lease.ExpiresAt.After(now) {
+		t.Fatalf("ExpiresAt = %v, want expired", lease.ExpiresAt)
+	}
+	if lease.PlaintextHash != sha256Hex(oldData) {
+		t.Fatalf("PlaintextHash = %q", lease.PlaintextHash)
+	}
+}
+
 func TestEmergeTargetsAllWorkspacesReadsOnePasswordDocumentsInParallel(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
@@ -216,6 +348,60 @@ func TestEmergeTargetsAllWorkspacesAuthenticatesOnePasswordBeforeParallelReads(t
 	}
 	if got := runtime.maxConcurrentReads(); got != 0 {
 		t.Fatalf("max concurrent reads = %d, want 0", got)
+	}
+}
+
+func TestEmergeTargetsAllWorkspacesReportsExpiredModifiedWithoutFailedRow(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldData := []byte("TOKEN=old\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(oldData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, []byte("TOKEN=local\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	resolvedTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-2*time.Hour), now.Add(-time.Hour), onePasswordStoreID, resolvedTargetPath, "item-1", sha256Hex(oldData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
+	var stdout bytes.Buffer
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &stdout,
+		Now:             func() time.Time { return now },
+		AllWorkspaces:   true,
+	}
+
+	err = uc.Run()
+	if err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	for _, want := range []string{
+		"expired modified",
+		"repo: myapp",
+		"file: .env",
+		"veil diff --all",
+		"veil vanish --commit or --discard",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+	if strings.Contains(stdout.String(), "failed") {
+		t.Fatalf("stdout = %q, did not want failed row", stdout.String())
 	}
 }
 

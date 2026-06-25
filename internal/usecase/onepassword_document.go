@@ -126,71 +126,87 @@ func writeConfig(fs stateFileSystem, configPath string, config domain.Config) er
 	return nil
 }
 
-func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID, target, workspaceTargetPath, itemID string, data []byte, now time.Time) (bool, error) {
+type materializedFileResult struct {
+	created         bool
+	expiredModified bool
+}
+
+func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID, target, workspaceTargetPath, itemID string, data []byte, now time.Time) (materializedFileResult, error) {
 	info, err := fs.Lstat(workspaceTargetPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			if err := fs.MkdirAll(filepath.Dir(workspaceTargetPath), 0o755); err != nil {
-				return false, fmt.Errorf("create workspace target directory: %w", err)
+				return materializedFileResult{}, fmt.Errorf("create workspace target directory: %w", err)
 			}
 			if err := fs.WriteFile(workspaceTargetPath, data, 0o600); err != nil {
-				return false, fmt.Errorf("write workspace target: %w", err)
+				return materializedFileResult{}, fmt.Errorf("write workspace target: %w", err)
 			}
-			return true, nil
+			return materializedFileResult{created: true}, nil
 		}
-		return false, fmt.Errorf("stat workspace target: %w", err)
+		return materializedFileResult{}, fmt.Errorf("stat workspace target: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return false, fmt.Errorf("workspace target is a symlink: %s", target)
+		return materializedFileResult{}, fmt.Errorf("workspace target is a symlink: %s", target)
 	}
 	if !info.Mode().IsRegular() {
-		return false, fmt.Errorf("workspace target must be a regular file: %s", target)
+		return materializedFileResult{}, fmt.Errorf("workspace target must be a regular file: %s", target)
 	}
 
 	currentData, err := fs.ReadFile(workspaceTargetPath)
 	if err != nil {
-		return false, fmt.Errorf("read workspace target: %w", err)
+		return materializedFileResult{}, fmt.Errorf("read workspace target: %w", err)
 	}
 	lease, ok, err := state.FindLease(workspaceID, target)
 	if err != nil {
-		return false, err
+		return materializedFileResult{}, err
 	}
 	if ok {
 		if lease.StoreID != onePasswordStoreID {
-			return false, fmt.Errorf("target is not emerged from 1Password document store: %s", target)
+			return materializedFileResult{}, fmt.Errorf("target is not emerged from 1Password document store: %s", target)
 		}
 		if lease.StorePath != "" && lease.StorePath != itemID {
-			return false, fmt.Errorf("target lease does not match registered 1Password document: %s", target)
-		}
-		if !lease.ExpiresAt.After(now) {
-			return false, fmt.Errorf("target lease is expired; re-run veil emerge before update: %s", target)
+			return materializedFileResult{}, fmt.Errorf("target lease does not match registered 1Password document: %s", target)
 		}
 		if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
-			return false, fmt.Errorf("target workspace path does not match active lease: %s", target)
+			return materializedFileResult{}, fmt.Errorf("target workspace path does not match active lease: %s", target)
 		}
-		if lease.PlaintextHash == "" {
-			if sha256Hex(currentData) != sha256Hex(data) {
-				return false, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before update: %s", target)
+		if !lease.ExpiresAt.After(now) {
+			if lease.PlaintextHash == "" {
+				if sha256Hex(currentData) != sha256Hex(data) {
+					return materializedFileResult{expiredModified: true}, nil
+				}
+				return materializedFileResult{}, nil
 			}
-			return false, nil
-		}
-		if _, err := validateOnePasswordMaterializedTarget(fs, lease, workspaceTargetPath, target, itemID, now); err != nil {
-			return false, err
-		}
-		if sha256Hex(currentData) != lease.PlaintextHash {
-			return false, fmt.Errorf("workspace target has uncommitted changes: %s", target)
+			currentHash := sha256Hex(currentData)
+			remoteHash := sha256Hex(data)
+			if currentHash != lease.PlaintextHash && currentHash != remoteHash {
+				return materializedFileResult{expiredModified: true}, nil
+			}
+		} else {
+			if lease.PlaintextHash == "" {
+				if sha256Hex(currentData) != sha256Hex(data) {
+					return materializedFileResult{}, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before update: %s", target)
+				}
+				return materializedFileResult{}, nil
+			}
+			if _, err := validateOnePasswordMaterializedTarget(fs, lease, workspaceTargetPath, target, itemID, now); err != nil {
+				return materializedFileResult{}, err
+			}
+			if sha256Hex(currentData) != lease.PlaintextHash {
+				return materializedFileResult{}, fmt.Errorf("workspace target has uncommitted changes: %s", target)
+			}
 		}
 	}
 	if !ok && sha256Hex(currentData) != sha256Hex(data) {
-		return false, fmt.Errorf("workspace target already exists: %s", target)
+		return materializedFileResult{}, fmt.Errorf("workspace target already exists: %s", target)
 	}
 	if string(currentData) == string(data) {
-		return false, nil
+		return materializedFileResult{}, nil
 	}
 	if err := fs.WriteFile(workspaceTargetPath, data, 0o600); err != nil {
-		return false, fmt.Errorf("write workspace target: %w", err)
+		return materializedFileResult{}, fmt.Errorf("write workspace target: %w", err)
 	}
-	return false, nil
+	return materializedFileResult{}, nil
 }
 
 type updateOnePasswordOptions struct {

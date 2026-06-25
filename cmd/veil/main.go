@@ -244,7 +244,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		cleaner := usecase.RunTTLCleaner{
 			FileSystem: infra.OSFileSystem{},
-			Stdout:     stdout,
 		}
 		runner := usecase.EmergeTargets{
 			FileSystem:      infra.OSFileSystem{},
