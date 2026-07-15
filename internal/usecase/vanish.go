@@ -30,6 +30,7 @@ type VanishTargets struct {
 	Stdout          io.Writer
 	Now             func() time.Time
 	AllWorkspaces   bool
+	Repo            string
 	Commit          bool
 	Discard         bool
 }
@@ -57,7 +58,7 @@ func (u VanishTargets) Run() error {
 		return err
 	}
 
-	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
+	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces, u.Repo)
 	if err != nil {
 		return err
 	}

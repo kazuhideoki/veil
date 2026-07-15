@@ -70,7 +70,7 @@ func (u DiffTargets) Run() error {
 		return err
 	}
 
-	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
+	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces, "")
 	if err != nil {
 		return err
 	}

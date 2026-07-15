@@ -42,6 +42,9 @@ veil add config/secrets
 # also ensures the macOS TTL cleanup agent is installed
 veil emerge
 
+# make managed files appear in a named repo from any directory
+veil emerge --repo myapp
+
 # edit the source document safely
 veil edit .env
 
@@ -56,6 +59,9 @@ veil update --overwrite-remote .env
 
 # remove materialized files from the workspace
 veil vanish
+
+# remove materialized files from a named repo from any directory
+veil vanish --repo myapp
 
 # remove materialized files from every registered workspace
 veil vanish --all

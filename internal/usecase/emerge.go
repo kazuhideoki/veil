@@ -39,6 +39,7 @@ type EmergeTargets struct {
 	Stdout          io.Writer
 	Now             func() time.Time
 	AllWorkspaces   bool
+	Repo            string
 }
 
 type emergeWorkspace struct {
@@ -47,18 +48,10 @@ type emergeWorkspace struct {
 }
 
 func (u EmergeTargets) Run() error {
-	configPath, config, err := loadConfig(u.FileSystem)
+	configPath, config, workspaces, err := u.resolveWorkspaces()
 	if err != nil {
 		return err
 	}
-
-	homeDir, err := u.FileSystem.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	config = expandConfigPaths(config, homeDir)
-	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 
 	statePath, state, err := loadState(u.FileSystem)
 	if err != nil {
@@ -66,16 +59,39 @@ func (u EmergeTargets) Run() error {
 	}
 
 	now := currentTime(u.Now)
-	if err := requireOnePasswordConfig(config); err != nil {
-		return err
-	}
-
-	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces)
-	if err != nil {
-		return err
-	}
 
 	return u.emergeOnePasswordDocuments(configPath, config, statePath, &state, workspaces, now)
+}
+
+// ValidateWorkspaceSelection rejects invalid workspace flags before commands cause side effects.
+func (u EmergeTargets) ValidateWorkspaceSelection() error {
+	_, _, _, err := u.resolveWorkspaces()
+	return err
+}
+
+func (u EmergeTargets) resolveWorkspaces() (string, domain.Config, []emergeWorkspace, error) {
+	configPath, config, err := loadConfig(u.FileSystem)
+	if err != nil {
+		return "", domain.Config{}, nil, err
+	}
+
+	homeDir, err := u.FileSystem.UserHomeDir()
+	if err != nil {
+		return "", domain.Config{}, nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+
+	config = expandConfigPaths(config, homeDir)
+	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
+	if err := requireOnePasswordConfig(config); err != nil {
+		return "", domain.Config{}, nil, err
+	}
+
+	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces, u.Repo)
+	if err != nil {
+		return "", domain.Config{}, nil, err
+	}
+
+	return configPath, config, workspaces, nil
 }
 
 func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config domain.Config, statePath string, state *domain.State, workspaces []emergeWorkspace, now time.Time) error {
@@ -475,7 +491,11 @@ func (l emergeOutputLayout) writeWorkspaceFailure(w io.Writer, workspaceID strin
 	fmt.Fprintf(w, "%-*s  repo: %-*s  error: %v\n", l.actionWidth, "failed", l.workspaceWidth, workspaceID, err)
 }
 
-func resolveEmergeWorkspaces(fs workspaceResolverFileSystem, config domain.Config, allWorkspaces bool) ([]emergeWorkspace, error) {
+func resolveEmergeWorkspaces(fs workspaceResolverFileSystem, config domain.Config, allWorkspaces bool, repo string) ([]emergeWorkspace, error) {
+	if allWorkspaces && repo != "" {
+		return nil, fmt.Errorf("--all and --repo cannot be used together")
+	}
+
 	if allWorkspaces {
 		ids := make([]string, 0, len(config.Workspaces))
 		for id := range config.Workspaces {
@@ -492,6 +512,18 @@ func resolveEmergeWorkspaces(fs workspaceResolverFileSystem, config domain.Confi
 		}
 
 		return workspaces, nil
+	}
+
+	if repo != "" {
+		workspace, ok := config.Workspaces[repo]
+		if !ok {
+			return nil, fmt.Errorf("repo is not registered: %s", repo)
+		}
+
+		return []emergeWorkspace{{
+			id:        repo,
+			workspace: workspace,
+		}}, nil
 	}
 
 	currentDir, err := fs.Getwd()

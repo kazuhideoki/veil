@@ -232,7 +232,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		emergeFlags.SetOutput(stderr)
 
 		var allWorkspaces bool
+		var repo string
 		emergeFlags.BoolVar(&allWorkspaces, "all", false, "emerge registered targets for all workspaces")
+		emergeFlags.StringVar(&repo, "repo", "", "emerge registered targets for the named repo")
 
 		if err := emergeFlags.Parse(args[1:]); err != nil {
 			return err
@@ -242,15 +244,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("emerge does not accept positional arguments: %v", emergeFlags.Args())
 		}
 
-		cleaner := usecase.RunTTLCleaner{
-			FileSystem: infra.OSFileSystem{},
-		}
 		runner := usecase.EmergeTargets{
 			FileSystem:      infra.OSFileSystem{},
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
+			Repo:            repo,
 		}
+		if err := runner.ValidateWorkspaceSelection(); err != nil {
+			return err
+		}
+
 		agent, err := defaultTTLAgent(stdout)
 		if err != nil {
 			return err
@@ -260,8 +264,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 			if err := agent.EnsureInstalled(); err != nil {
 				return err
 			}
-			if err := cleaner.Run(); err != nil {
-				return err
+			if repo == "" {
+				cleaner := usecase.RunTTLCleaner{FileSystem: infra.OSFileSystem{}}
+				if err := cleaner.Run(); err != nil {
+					return err
+				}
 			}
 			return runner.Run()
 		})
@@ -270,9 +277,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		vanishFlags.SetOutput(stderr)
 
 		var allWorkspaces bool
+		var repo string
 		var commit bool
 		var discard bool
 		vanishFlags.BoolVar(&allWorkspaces, "all", false, "vanish registered targets for all workspaces")
+		vanishFlags.StringVar(&repo, "repo", "", "vanish registered targets for the named repo")
 		vanishFlags.BoolVar(&commit, "commit", false, "commit modified 1Password document targets before vanishing")
 		vanishFlags.BoolVar(&discard, "discard", false, "discard modified 1Password document targets while vanishing")
 
@@ -289,6 +298,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
+			Repo:            repo,
 			Commit:          commit,
 			Discard:         discard,
 		}
