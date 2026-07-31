@@ -351,6 +351,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			TargetPath:      targetPath,
 			AllWorkspaces:   allWorkspaces,
 			Summary:         summary,
+			ColorOutput:     writerSupportsColor(stdout),
 		}
 
 		return runner.Run()
@@ -492,6 +493,15 @@ func withStateLock(run func() error) error {
 	}()
 
 	return run()
+}
+
+func writerSupportsColor(w io.Writer) bool {
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func stdinIsTerminal() bool {

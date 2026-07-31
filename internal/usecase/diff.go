@@ -30,6 +30,7 @@ type DiffTargets struct {
 	Now             func() time.Time
 	AllWorkspaces   bool
 	Summary         bool
+	ColorOutput     bool
 }
 
 type diffTargetResult struct {
@@ -116,7 +117,7 @@ func (u DiffTargets) Run() error {
 			found = true
 			layout.writeResult(u.Stdout, result)
 			if !u.Summary && !bytes.Equal(result.RemoteData, result.WorkspaceData) {
-				writeUnifiedDiff(u.Stdout, result.Target, result.RemoteData, result.WorkspaceData)
+				writeUnifiedDiff(u.Stdout, result.Target, result.RemoteData, result.WorkspaceData, u.ColorOutput)
 			}
 		}
 	}
@@ -293,7 +294,7 @@ func (l diffOutputLayout) writeFailure(w io.Writer, workspaceID, target string, 
 	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s  error: %v\n", l.actionWidth, "failed", l.workspaceWidth, workspaceID, target, err)
 }
 
-func writeUnifiedDiff(w io.Writer, target string, remoteData, workspaceData []byte) {
+func writeUnifiedDiff(w io.Writer, target string, remoteData, workspaceData []byte, colorOutput bool) {
 	remoteLines := splitDiffLines(string(remoteData))
 	workspaceLines := splitDiffLines(string(workspaceData))
 	ops := unifiedDiffOps(remoteLines, workspaceLines)
@@ -305,7 +306,7 @@ func writeUnifiedDiff(w io.Writer, target string, remoteData, workspaceData []by
 	for _, hunk := range hunks {
 		fmt.Fprintf(w, "@@ -%d,%d +%d,%d @@\n", hunk.oldStart, hunk.oldCount, hunk.newStart, hunk.newCount)
 		for _, op := range hunk.ops {
-			writeDiffLine(w, op.prefix, op.line)
+			writeDiffLine(w, op.prefix, op.line, colorOutput)
 		}
 	}
 }
@@ -437,7 +438,21 @@ func splitDiffLines(value string) []string {
 	return lines
 }
 
-func writeDiffLine(w io.Writer, prefix byte, line string) {
+func writeDiffLine(w io.Writer, prefix byte, line string, colorOutput bool) {
+	color := ""
+	if colorOutput {
+		switch prefix {
+		case '-':
+			color = "\x1b[31m"
+		case '+':
+			color = "\x1b[32m"
+		}
+	}
+	if color != "" {
+		line = strings.TrimSuffix(line, "\n")
+		fmt.Fprintf(w, "%s%c%s\x1b[0m\n", color, prefix, line)
+		return
+	}
 	fmt.Fprintf(w, "%c%s", prefix, line)
 	if !strings.HasSuffix(line, "\n") {
 		fmt.Fprintln(w)

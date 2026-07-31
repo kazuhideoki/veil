@@ -685,7 +685,7 @@ func TestWriteUnifiedDiffShowsOnlyNearbyContext(t *testing.T) {
 		"LINE=5",
 		"LINE=6",
 		"LINE=7",
-	}, "\n")+"\n"))
+	}, "\n")+"\n"), false)
 
 	got := stdout.String()
 	for _, want := range []string{
@@ -704,6 +704,24 @@ func TestWriteUnifiedDiffShowsOnlyNearbyContext(t *testing.T) {
 	for _, unwanted := range []string{" LINE=1\n", " LINE=7\n"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("stdout = %q, did not want %q", got, unwanted)
+		}
+	}
+}
+
+func TestWriteUnifiedDiffColorsAddedAndDeletedLines(t *testing.T) {
+	var stdout bytes.Buffer
+
+	writeUnifiedDiff(&stdout, ".env", []byte("TOKEN=old\n"), []byte("TOKEN=new\n"), true)
+
+	got := stdout.String()
+	for _, want := range []string{
+		"--- 1password/.env\n",
+		"+++ workspace/.env\n",
+		"\x1b[31m-TOKEN=old\x1b[0m\n",
+		"\x1b[32m+TOKEN=new\x1b[0m\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stdout = %q, want %q", got, want)
 		}
 	}
 }
