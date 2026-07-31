@@ -22,6 +22,20 @@ func TestRunWithUnsupportedArgsReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunCommitRequiresExactlyOneTarget(t *testing.T) {
+	err := run([]string{"commit"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "commit requires exactly one target path") {
+		t.Fatalf("run(commit) error = %v", err)
+	}
+}
+
+func TestRunUpdateCommandIsRemoved(t *testing.T) {
+	err := run([]string{"update"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "unsupported arguments") {
+		t.Fatalf("run(update) error = %v", err)
+	}
+}
+
 func TestWriteErrorPrintsErrorInRed(t *testing.T) {
 	var stderr bytes.Buffer
 

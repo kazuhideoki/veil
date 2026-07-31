@@ -452,7 +452,7 @@ func TestEmergeTargetsRejectsExistingOnePasswordFileWithInvalidLease(t *testing.
 	}
 }
 
-func TestUpdateTargetCommitsMaterializedOnePasswordDocument(t *testing.T) {
+func TestCommitTargetCommitsMaterializedOnePasswordDocument(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
@@ -473,7 +473,7 @@ func TestUpdateTargetCommitsMaterializedOnePasswordDocument(t *testing.T) {
 
 	runtime := newFakeOnePasswordRuntime()
 	runtime.documents["item-1"] = []byte("TOKEN=old\n")
-	uc := UpdateTarget{
+	uc := CommitTarget{
 		FileSystem:      infra.OSFileSystem{},
 		DocumentRuntime: runtime,
 		Stdout:          &bytes.Buffer{},
@@ -496,7 +496,7 @@ func TestUpdateTargetCommitsMaterializedOnePasswordDocument(t *testing.T) {
 	}
 }
 
-func TestUpdateTargetRejectsRemoteConflict(t *testing.T) {
+func TestCommitTargetRejectsRemoteConflict(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
@@ -516,7 +516,7 @@ func TestUpdateTargetRejectsRemoteConflict(t *testing.T) {
 
 	runtime := newFakeOnePasswordRuntime()
 	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
-	uc := UpdateTarget{
+	uc := CommitTarget{
 		FileSystem:      infra.OSFileSystem{},
 		DocumentRuntime: runtime,
 		Stdout:          &bytes.Buffer{},
@@ -536,7 +536,7 @@ func TestUpdateTargetRejectsRemoteConflict(t *testing.T) {
 	}
 }
 
-func TestUpdateTargetOverwriteRemoteCommitsConflict(t *testing.T) {
+func TestCommitTargetOverwriteRemoteCommitsConflict(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
@@ -557,7 +557,7 @@ func TestUpdateTargetOverwriteRemoteCommitsConflict(t *testing.T) {
 	runtime := newFakeOnePasswordRuntime()
 	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
 	var stdout bytes.Buffer
-	uc := UpdateTarget{
+	uc := CommitTarget{
 		FileSystem:      infra.OSFileSystem{},
 		DocumentRuntime: runtime,
 		Stdout:          &stdout,
@@ -726,7 +726,7 @@ func TestWriteUnifiedDiffColorsAddedAndDeletedLines(t *testing.T) {
 	}
 }
 
-func TestUpdateTargetRequiresActiveOnePasswordLease(t *testing.T) {
+func TestCommitTargetRequiresActiveOnePasswordLease(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
@@ -739,7 +739,7 @@ func TestUpdateTargetRequiresActiveOnePasswordLease(t *testing.T) {
 
 	runtime := newFakeOnePasswordRuntime()
 	runtime.documents["item-1"] = []byte("TOKEN=old\n")
-	uc := UpdateTarget{
+	uc := CommitTarget{
 		FileSystem:      infra.OSFileSystem{},
 		DocumentRuntime: runtime,
 		Stdout:          &bytes.Buffer{},
@@ -838,7 +838,7 @@ func TestStatusTargetsShowsRemainingTTLForModifiedOnePasswordTarget(t *testing.T
 	}
 }
 
-func TestUpdateTargetRejectsSymlinkWorkspaceTarget(t *testing.T) {
+func TestCommitTargetRejectsSymlinkWorkspaceTarget(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
@@ -863,7 +863,7 @@ func TestUpdateTargetRejectsSymlinkWorkspaceTarget(t *testing.T) {
 
 	runtime := newFakeOnePasswordRuntime()
 	runtime.documents["item-1"] = []byte("TOKEN=old\n")
-	uc := UpdateTarget{
+	uc := CommitTarget{
 		FileSystem:      infra.OSFileSystem{},
 		DocumentRuntime: runtime,
 		Stdout:          &bytes.Buffer{},
@@ -917,7 +917,7 @@ func TestEditTargetRefusesWhenEmergedWorkspaceTargetHasUncommittedChanges(t *tes
 	if err == nil {
 		t.Fatal("Run() returned nil error")
 	}
-	for _, want := range []string{"uncommitted changes", "veil update .env"} {
+	for _, want := range []string{"uncommitted changes", "veil commit .env"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want %q", err, want)
 		}

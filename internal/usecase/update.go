@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type updateFileSystem interface {
+type commitFileSystem interface {
 	UserHomeDir() (string, error)
 	Getwd() (string, error)
 	EvalSymlinks(path string) (string, error)
@@ -21,8 +21,8 @@ type updateFileSystem interface {
 	Remove(name string) error
 }
 
-type UpdateTarget struct {
-	FileSystem      updateFileSystem
+type CommitTarget struct {
+	FileSystem      commitFileSystem
 	DocumentRuntime OnePasswordDocumentRuntime
 	Stdout          io.Writer
 	TargetPath      string
@@ -30,7 +30,7 @@ type UpdateTarget struct {
 	OverwriteRemote bool
 }
 
-func (u UpdateTarget) Run() error {
+func (u CommitTarget) Run() error {
 	configPath, config, err := loadConfig(u.FileSystem)
 	if err != nil {
 		return err
@@ -42,7 +42,7 @@ func (u UpdateTarget) Run() error {
 	config = expandConfigPaths(config, homeDir)
 	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 	if !config.IsOnePasswordStore() {
-		return fmt.Errorf("update is only supported for 1Password document stores")
+		return fmt.Errorf("commit is only supported for 1Password document stores")
 	}
 	if err := requireOnePasswordRuntime(u.DocumentRuntime); err != nil {
 		return err
@@ -83,10 +83,10 @@ func (u UpdateTarget) Run() error {
 		return fmt.Errorf("target is not emerged from 1Password document store: %s", targetPath)
 	}
 	if lease.PlaintextHash == "" {
-		return fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before update: %s", targetPath)
+		return fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before commit: %s", targetPath)
 	}
 	if !lease.ExpiresAt.After(currentTime(u.Now)) {
-		return fmt.Errorf("target lease is expired; re-run veil emerge before update: %s", targetPath)
+		return fmt.Errorf("target lease is expired; re-run veil emerge before commit: %s", targetPath)
 	}
 	if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
 		return fmt.Errorf("target workspace path does not match active lease: %s", targetPath)
@@ -128,6 +128,6 @@ func (u UpdateTarget) Run() error {
 			return fmt.Errorf("write config file: %w", err)
 		}
 	}
-	writeUpdatedTarget(u.Stdout, targetPath, changed, u.OverwriteRemote)
+	writeCommittedTarget(u.Stdout, targetPath, changed, u.OverwriteRemote)
 	return nil
 }

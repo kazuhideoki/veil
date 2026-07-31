@@ -226,9 +226,9 @@ func (u DiffTargets) diffTarget(config domain.Config, state domain.State, worksp
 
 	if result.Expired {
 		if result.Detail == "" {
-			result.Detail = "target lease is expired; re-run veil emerge before update"
+			result.Detail = "target lease is expired; re-run veil emerge before commit"
 		} else {
-			result.Detail += "; target lease is expired; re-run veil emerge before update"
+			result.Detail += "; target lease is expired; re-run veil emerge before commit"
 		}
 	}
 

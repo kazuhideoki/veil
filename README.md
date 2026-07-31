@@ -52,10 +52,10 @@ veil edit .env
 veil diff .env
 
 # commit materialized edits back to 1Password
-veil update .env
+veil commit .env
 
 # explicitly overwrite a remotely changed 1Password document after resolving a conflict
-veil update --overwrite-remote .env
+veil commit --overwrite-remote .env
 
 # remove materialized files from the workspace
 veil vanish
@@ -96,11 +96,11 @@ veil diff .env
 veil diff --summary
 ```
 
-`veil diff` compares the workspace file with the current 1Password document. If both sides changed since the last Veil sync, Veil reports a conflict. In that case, `veil update .env` and `veil vanish --commit` refuse to overwrite 1Password implicitly. Review the diff, edit the workspace file to the desired final contents, then explicitly overwrite the remote document:
+`veil diff` compares the workspace file with the current 1Password document. If both sides changed since the last Veil sync, Veil reports a conflict. In that case, `veil commit .env` and `veil vanish --commit` refuse to overwrite 1Password implicitly. Review the diff, edit the workspace file to the desired final contents, then explicitly overwrite the remote document:
 
 ```bash
 veil diff .env
-veil update --overwrite-remote .env
+veil commit --overwrite-remote .env
 veil vanish
 ```
 

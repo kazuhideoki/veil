@@ -134,7 +134,7 @@ func (u EditTarget) editOnePasswordDocument(config domain.Config) error {
 			return err
 		}
 		if sha256Hex(workspaceData) != lease.PlaintextHash {
-			return fmt.Errorf("workspace target has uncommitted changes; run veil update %s before edit", targetPath)
+			return fmt.Errorf("workspace target has uncommitted changes; run veil commit %s before edit", targetPath)
 		}
 	}
 

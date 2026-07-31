@@ -234,7 +234,7 @@ func ensureWorkspacePlaintextMatchesDocument(fs removeFileSystem, runtime OnePas
 		return fmt.Errorf("read workspace target: %w", err)
 	}
 	if sha256Hex(workspaceData) != sha256Hex(documentData) {
-		return fmt.Errorf("workspace target differs from 1Password document: %s; run veil update before remove or vanish --discard and retry", targetPath)
+		return fmt.Errorf("workspace target differs from 1Password document: %s; run veil commit before remove or vanish --discard and retry", targetPath)
 	}
 	return nil
 }
@@ -263,7 +263,7 @@ func validateWorkspaceTargetBeforePurge(fs removeFileSystem, runtime OnePassword
 		return false, fmt.Errorf("read workspace target: %w", err)
 	}
 	if sha256Hex(workspaceData) != sha256Hex(documentData) {
-		return false, fmt.Errorf("workspace target differs from 1Password document: %s; run veil update before purge or vanish --discard and retry", targetPath)
+		return false, fmt.Errorf("workspace target differs from 1Password document: %s; run veil commit before purge or vanish --discard and retry", targetPath)
 	}
 	return true, nil
 }

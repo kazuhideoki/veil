@@ -87,10 +87,10 @@ func validateOnePasswordMaterializedTarget(fs onePasswordMaterializedFileSystem,
 		return nil, fmt.Errorf("target lease does not match registered 1Password document: %s", targetPath)
 	}
 	if lease.PlaintextHash == "" {
-		return nil, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before update: %s", targetPath)
+		return nil, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before commit: %s", targetPath)
 	}
 	if !lease.ExpiresAt.After(now) {
-		return nil, fmt.Errorf("target lease is expired; re-run veil emerge before update: %s", targetPath)
+		return nil, fmt.Errorf("target lease is expired; re-run veil emerge before commit: %s", targetPath)
 	}
 	if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
 		return nil, fmt.Errorf("target workspace path does not match active lease: %s", targetPath)
@@ -185,7 +185,7 @@ func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID
 		} else {
 			if lease.PlaintextHash == "" {
 				if sha256Hex(currentData) != sha256Hex(data) {
-					return materializedFileResult{}, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before update: %s", target)
+					return materializedFileResult{}, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before commit: %s", target)
 				}
 				return materializedFileResult{}, nil
 			}
@@ -280,13 +280,13 @@ func updateLeaseHash(state *domain.State, workspaceID, target, workspacePath, it
 	return state.UpsertLeaseWithHash(workspaceID, target, now, now.Add(ttl), onePasswordStoreID, workspacePath, itemID, plaintextHash)
 }
 
-func writeUpdatedTarget(w io.Writer, target string, changed, overwriteRemote bool) {
+func writeCommittedTarget(w io.Writer, target string, changed, overwriteRemote bool) {
 	if changed {
 		if overwriteRemote {
 			fmt.Fprintf(w, "overwrote remote target: %s\n", target)
 			return
 		}
-		fmt.Fprintf(w, "updated target: %s\n", target)
+		fmt.Fprintf(w, "committed target: %s\n", target)
 		return
 	}
 	fmt.Fprintf(w, "already up to date target: %s\n", target)

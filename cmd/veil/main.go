@@ -100,26 +100,26 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		return withStateLock(runner.Run)
-	case "update":
-		updateFlags := flag.NewFlagSet("update", flag.ContinueOnError)
-		updateFlags.SetOutput(stderr)
+	case "commit":
+		commitFlags := flag.NewFlagSet("commit", flag.ContinueOnError)
+		commitFlags.SetOutput(stderr)
 
 		var overwriteRemote bool
-		updateFlags.BoolVar(&overwriteRemote, "overwrite-remote", false, "overwrite a changed 1Password document with the workspace target")
+		commitFlags.BoolVar(&overwriteRemote, "overwrite-remote", false, "overwrite a changed 1Password document with the workspace target")
 
-		if err := updateFlags.Parse(args[1:]); err != nil {
+		if err := commitFlags.Parse(args[1:]); err != nil {
 			return err
 		}
 
-		if updateFlags.NArg() != 1 {
-			return fmt.Errorf("update requires exactly one target path")
+		if commitFlags.NArg() != 1 {
+			return fmt.Errorf("commit requires exactly one target path")
 		}
 
-		runner := usecase.UpdateTarget{
+		runner := usecase.CommitTarget{
 			FileSystem:      infra.OSFileSystem{},
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
-			TargetPath:      updateFlags.Arg(0),
+			TargetPath:      commitFlags.Arg(0),
 			OverwriteRemote: overwriteRemote,
 		}
 
