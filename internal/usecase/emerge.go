@@ -37,9 +37,11 @@ type EmergeTargets struct {
 	FileSystem      emergeFileSystem
 	DocumentRuntime OnePasswordDocumentRuntime
 	Stdout          io.Writer
+	VerboseOutput   io.Writer
 	Now             func() time.Time
 	AllWorkspaces   bool
 	Repo            string
+	Refresh         bool
 }
 
 type emergeWorkspace struct {
@@ -146,7 +148,27 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 			}
 
 			vault := onePasswordVault(config, document)
+			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
+			if !u.Refresh {
+				if hash, ok := reusableActiveLease(u.FileSystem, *state, entry.id, target, workspaceTargetPath, document.ItemID, now); ok {
+					document.ContentSHA256 = hash
+					if document.Vault != vault {
+						document.Vault = vault
+						if err := config.UpsertDocument(document); err != nil {
+							return err
+						}
+						configChanged = true
+					}
+					writeEmergeVerbose(u.VerboseOutput, "reused active lease: %s", emergeTargetLabel(u.AllWorkspaces, entry.id, target))
+					outputLayout.writeTarget(u.Stdout, entry.id, emergeTargetLabel(u.AllWorkspaces, entry.id, target), target, false)
+					continue
+				}
+			}
+
+			readStarted := time.Now()
 			data, err := u.DocumentRuntime.ReadDocument(vault, document.ItemID)
+			readDuration := time.Since(readStarted)
+			writeEmergeVerbose(u.VerboseOutput, "1Password read: %s (%s)", emergeTargetLabel(u.AllWorkspaces, entry.id, target), readDuration.Round(time.Millisecond))
 			if err != nil {
 				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("read 1Password document: %w", err))
 				if u.AllWorkspaces {
@@ -157,7 +179,6 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 				return wrappedErrOrRollback(u.FileSystem, statePath, originalState, createdTargetPaths, wrappedErr)
 			}
 
-			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
 			materialized, err := ensureMaterializedFile(u.FileSystem, *state, entry.id, target, workspaceTargetPath, document.ItemID, data, now)
 			if err != nil {
 				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err)
@@ -211,7 +232,7 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 	return nil
 }
 
-const emergeParallelism = 4
+const emergeParallelism = 8
 
 type emergeOnePasswordTask struct {
 	order       int
@@ -233,6 +254,8 @@ type emergeOnePasswordResult struct {
 	created             bool
 	expiredModified     bool
 	configChanged       bool
+	reused              bool
+	readDuration        time.Duration
 	err                 error
 }
 
@@ -280,6 +303,30 @@ func (u EmergeTargets) emergeOnePasswordWorkspaces(configPath string, config dom
 				continue
 			}
 
+			vault := onePasswordVault(config, document)
+			workspaceTargetPath := filepath.Join(entry.workspace.Root, target)
+			if !u.Refresh {
+				if hash, ok := reusableActiveLease(u.FileSystem, *state, entry.id, target, workspaceTargetPath, document.ItemID, now); ok {
+					document.ContentSHA256 = hash
+					configChanged := document.Vault != vault
+					if configChanged {
+						document.Vault = vault
+					}
+					results = append(results, emergeOnePasswordResult{
+						order:               order,
+						workspaceID:         entry.id,
+						target:              target,
+						workspaceTargetPath: workspaceTargetPath,
+						document:            document,
+						ttl:                 ttl,
+						configChanged:       configChanged,
+						reused:              true,
+					})
+					order++
+					continue
+				}
+			}
+
 			tasks = append(tasks, emergeOnePasswordTask{
 				order:       order,
 				workspaceID: entry.id,
@@ -287,18 +334,28 @@ func (u EmergeTargets) emergeOnePasswordWorkspaces(configPath string, config dom
 				target:      target,
 				ttl:         ttl,
 				document:    document,
-				vault:       onePasswordVault(config, document),
+				vault:       vault,
 			})
 			order++
 		}
 	}
 
 	if len(tasks) > 0 {
+		authStarted := time.Now()
 		if err := authenticateOnePasswordRuntime(u.DocumentRuntime); err != nil {
 			return err
 		}
+		writeEmergeVerbose(u.VerboseOutput, "1Password authentication: %s", time.Since(authStarted).Round(time.Millisecond))
+		writeEmergeVerbose(u.VerboseOutput, "1Password reads started: documents=%d parallelism=%d", len(tasks), min(len(tasks), emergeParallelism))
 	}
-	results = append(results, runEmergeOnePasswordTasks(u.FileSystem, u.DocumentRuntime, *state, now, tasks)...)
+	for _, result := range results {
+		if result.reused {
+			writeEmergeVerbose(u.VerboseOutput, "reused active lease: %s", emergeTargetLabel(true, result.workspaceID, result.target))
+		}
+	}
+	results = append(results, runEmergeOnePasswordTasks(u.FileSystem, u.DocumentRuntime, *state, now, tasks, func(result emergeOnePasswordResult) {
+		writeEmergeVerbose(u.VerboseOutput, "1Password read completed: %s (%s)", emergeTargetLabel(true, result.workspaceID, result.target), result.readDuration.Round(time.Millisecond))
+	})...)
 	sort.Slice(results, func(i, j int) bool { return results[i].order < results[j].order })
 
 	createdTargetPaths := []string{}
@@ -329,8 +386,10 @@ func (u EmergeTargets) emergeOnePasswordWorkspaces(configPath string, config dom
 			}
 			configChanged = true
 		}
-		if err := updateLeaseHash(state, result.workspaceID, result.target, result.workspaceTargetPath, result.document.ItemID, result.document.ContentSHA256, now, result.ttl); err != nil {
-			return wrappedErrOrRollback(u.FileSystem, statePath, originalState, createdTargetPaths, err)
+		if !result.reused {
+			if err := updateLeaseHash(state, result.workspaceID, result.target, result.workspaceTargetPath, result.document.ItemID, result.document.ContentSHA256, now, result.ttl); err != nil {
+				return wrappedErrOrRollback(u.FileSystem, statePath, originalState, createdTargetPaths, err)
+			}
 		}
 		outputLayout.writeTarget(u.Stdout, result.workspaceID, emergeTargetLabel(true, result.workspaceID, result.target), result.target, result.created)
 	}
@@ -346,7 +405,7 @@ func (u EmergeTargets) emergeOnePasswordWorkspaces(configPath string, config dom
 	return emergeErr
 }
 
-func runEmergeOnePasswordTasks(fs emergeFileSystem, runtime OnePasswordDocumentRuntime, state domain.State, now time.Time, tasks []emergeOnePasswordTask) []emergeOnePasswordResult {
+func runEmergeOnePasswordTasks(fs emergeFileSystem, runtime OnePasswordDocumentRuntime, state domain.State, now time.Time, tasks []emergeOnePasswordTask, onResult func(emergeOnePasswordResult)) []emergeOnePasswordResult {
 	if len(tasks) == 0 {
 		return nil
 	}
@@ -356,7 +415,7 @@ func runEmergeOnePasswordTasks(fs emergeFileSystem, runtime OnePasswordDocumentR
 		workerCount = len(tasks)
 	}
 
-	taskCh := make(chan emergeOnePasswordTask)
+	taskCh := make(chan emergeOnePasswordTask, len(tasks))
 	resultCh := make(chan emergeOnePasswordResult, len(tasks))
 	var wg sync.WaitGroup
 
@@ -374,11 +433,16 @@ func runEmergeOnePasswordTasks(fs emergeFileSystem, runtime OnePasswordDocumentR
 		taskCh <- task
 	}
 	close(taskCh)
-	wg.Wait()
-	close(resultCh)
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
 
 	results := make([]emergeOnePasswordResult, 0, len(tasks))
 	for result := range resultCh {
+		if onResult != nil {
+			onResult(result)
+		}
 		results = append(results, result)
 	}
 	return results
@@ -393,7 +457,9 @@ func runEmergeOnePasswordTask(fs emergeFileSystem, runtime OnePasswordDocumentRu
 		ttl:         task.ttl,
 	}
 
+	readStarted := time.Now()
 	data, err := runtime.ReadDocument(task.vault, task.document.ItemID)
+	result.readDuration = time.Since(readStarted)
 	if err != nil {
 		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, fmt.Errorf("read 1Password document: %w", err))
 		return result
@@ -420,6 +486,26 @@ func runEmergeOnePasswordTask(fs emergeFileSystem, runtime OnePasswordDocumentRu
 		result.configChanged = true
 	}
 	return result
+}
+
+// reusableActiveLease avoids a remote read only when the local materialization still matches its active lease.
+func reusableActiveLease(fs emergeFileSystem, state domain.State, workspaceID, target, workspaceTargetPath, itemID string, now time.Time) (string, bool) {
+	lease, ok, err := state.FindLease(workspaceID, target)
+	if err != nil || !ok || !lease.ExpiresAt.After(now) || lease.PlaintextHash == "" {
+		return "", false
+	}
+	data, err := validateOnePasswordMaterializedTarget(fs, lease, workspaceTargetPath, target, itemID, now)
+	if err != nil || sha256Hex(data) != lease.PlaintextHash {
+		return "", false
+	}
+	return lease.PlaintextHash, true
+}
+
+func writeEmergeVerbose(w io.Writer, format string, args ...any) {
+	if w == nil {
+		return
+	}
+	fmt.Fprintf(w, "verbose: "+format+"\n", args...)
 }
 
 func wrappedErrOrRollback(fs emergeFileSystem, statePath string, originalState domain.State, createdTargetPaths []string, err error) error {

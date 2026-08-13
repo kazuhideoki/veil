@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/kazuhideoki/veil/internal/infra"
 	"github.com/kazuhideoki/veil/internal/usecase"
@@ -233,8 +234,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		var allWorkspaces bool
 		var repo string
+		var refresh bool
+		var verbose bool
 		emergeFlags.BoolVar(&allWorkspaces, "all", false, "emerge registered targets for all workspaces")
 		emergeFlags.StringVar(&repo, "repo", "", "emerge registered targets for the named repo")
+		emergeFlags.BoolVar(&refresh, "refresh", false, "fetch 1Password documents even when active leases can be reused")
+		emergeFlags.BoolVar(&verbose, "verbose", false, "show emerge timing details")
 
 		if err := emergeFlags.Parse(args[1:]); err != nil {
 			return err
@@ -250,6 +255,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
 			Repo:            repo,
+			Refresh:         refresh,
+		}
+		if verbose {
+			runner.VerboseOutput = stderr
 		}
 		if err := runner.ValidateWorkspaceSelection(); err != nil {
 			return err
@@ -260,17 +269,28 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 
-		return withStateLock(func() error {
+		totalStarted := time.Now()
+		return withStateLockObserved(func() error {
+			agentStarted := time.Now()
 			if err := agent.EnsureInstalled(); err != nil {
 				return err
 			}
+			writeVerboseTiming(stderr, verbose, "TTL agent check", time.Since(agentStarted))
 			if repo == "" {
 				cleaner := usecase.RunTTLCleaner{FileSystem: infra.OSFileSystem{}}
+				cleanupStarted := time.Now()
 				if err := cleaner.Run(); err != nil {
 					return err
 				}
+				writeVerboseTiming(stderr, verbose, "TTL cleanup", time.Since(cleanupStarted))
 			}
-			return runner.Run()
+			emergeStarted := time.Now()
+			err := runner.Run()
+			writeVerboseTiming(stderr, verbose, "emerge", time.Since(emergeStarted))
+			writeVerboseTiming(stderr, verbose, "total", time.Since(totalStarted))
+			return err
+		}, func(wait time.Duration) {
+			writeVerboseTiming(stderr, verbose, "state lock wait", wait)
 		})
 	case "vanish":
 		vanishFlags := flag.NewFlagSet("vanish", flag.ContinueOnError)
@@ -470,6 +490,10 @@ func defaultTTLAgent(stdout io.Writer) (usecase.TTLAgent, error) {
 }
 
 func withStateLock(run func() error) error {
+	return withStateLockObserved(run, nil)
+}
+
+func withStateLockObserved(run func() error, onAcquired func(time.Duration)) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
@@ -485,14 +509,25 @@ func withStateLock(run func() error) error {
 	defer func() {
 		_ = lockFile.Close()
 	}()
+	waitStarted := time.Now()
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
 		return fmt.Errorf("acquire state lock: %w", err)
+	}
+	if onAcquired != nil {
+		onAcquired(time.Since(waitStarted))
 	}
 	defer func() {
 		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
 	}()
 
 	return run()
+}
+
+func writeVerboseTiming(w io.Writer, enabled bool, label string, elapsed time.Duration) {
+	if !enabled {
+		return
+	}
+	fmt.Fprintf(w, "verbose: %s: %s\n", label, elapsed.Round(time.Millisecond))
 }
 
 func writerSupportsColor(w io.Writer) bool {

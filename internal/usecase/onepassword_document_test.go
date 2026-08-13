@@ -3,6 +3,7 @@ package usecase
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -311,6 +312,144 @@ func TestEmergeTargetsAllWorkspacesReadsOnePasswordDocumentsInParallel(t *testin
 		if _, err := os.Stat(filepath.Join(workspaceRoot, target)); err != nil {
 			t.Fatalf("Stat(%q) returned error: %v", target, err)
 		}
+	}
+}
+
+func TestEmergeTargetsAllWorkspacesUsesEightWorkers(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	targets := make([]string, emergeParallelism)
+	documents := make(map[string][]byte, emergeParallelism)
+	for i := range emergeParallelism {
+		target := fmt.Sprintf("secret-%d.env", i)
+		itemID := fmt.Sprintf("item-%d", i)
+		targets[i] = fmt.Sprintf("%q", target)
+		documents[itemID] = []byte(fmt.Sprintf("VALUE=%d\n", i))
+	}
+	prepareOnePasswordWorkspace(t, tempHome, "targets = ["+strings.Join(targets, ", ")+"]")
+	for i := range emergeParallelism {
+		target := fmt.Sprintf("secret-%d.env", i)
+		itemID := fmt.Sprintf("item-%d", i)
+		appendDocumentConfig(t, tempHome, target, itemID, sha256Hex(documents[itemID]))
+	}
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newBlockingOnePasswordRuntime(documents)
+	runtime.releaseAt = emergeParallelism
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		Now:             func() time.Time { return time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC) },
+		AllWorkspaces:   true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if got := runtime.maxConcurrentReads(); got != emergeParallelism {
+		t.Fatalf("max concurrent reads = %d, want %d", got, emergeParallelism)
+	}
+}
+
+func TestEmergeTargetsAllWorkspacesReusesMatchingActiveLease(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	localData := []byte("TOKEN=local\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(localData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, localData, 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, targetPath, "item-1", sha256Hex(localData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
+	var verbose bytes.Buffer
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		VerboseOutput:   &verbose,
+		Now:             func() time.Time { return now },
+		AllWorkspaces:   true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if got := runtime.readCount(); got != 0 {
+		t.Fatalf("ReadDocument() calls = %d, want 0", got)
+	}
+	if data, err := os.ReadFile(targetPath); err != nil || string(data) != string(localData) {
+		t.Fatalf("workspace data = %q, %v", data, err)
+	}
+	if !strings.Contains(verbose.String(), "reused active lease: myapp:.env") {
+		t.Fatalf("verbose output = %q", verbose.String())
+	}
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	lease, ok, err := refreshed.FindLease("myapp", ".env")
+	if err != nil || !ok {
+		t.Fatalf("FindLease() = %#v, %v, %v", lease, ok, err)
+	}
+	if !lease.ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("ExpiresAt = %v, want original lease expiration", lease.ExpiresAt)
+	}
+}
+
+func TestEmergeTargetsRefreshFetchesMatchingActiveLease(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	localData := []byte("TOKEN=local\n")
+	remoteData := []byte("TOKEN=remote\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(localData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, localData, 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, targetPath, "item-1", sha256Hex(localData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = remoteData
+	var verbose bytes.Buffer
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		VerboseOutput:   &verbose,
+		Now:             func() time.Time { return now },
+		AllWorkspaces:   true,
+		Refresh:         true,
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if got := runtime.readCount(); got != 1 {
+		t.Fatalf("ReadDocument() calls = %d, want 1", got)
+	}
+	if data, err := os.ReadFile(targetPath); err != nil || string(data) != string(remoteData) {
+		t.Fatalf("workspace data = %q, %v", data, err)
+	}
+	if !strings.Contains(verbose.String(), "1Password read completed: myapp:.env") {
+		t.Fatalf("verbose output = %q", verbose.String())
 	}
 }
 
@@ -1525,7 +1664,9 @@ func chdirForTest(t *testing.T, path string) func() {
 }
 
 type fakeOnePasswordRuntime struct {
+	mu           sync.Mutex
 	documents    map[string][]byte
+	readCalls    int
 	deleted      []string
 	nextID       int
 	createdTitle string
@@ -1540,6 +1681,7 @@ type blockingOnePasswordRuntime struct {
 	maxConcurrent int
 	authCalls     int
 	authErr       error
+	releaseAt     int
 }
 
 type mutatingEditorRunner struct {
@@ -1565,6 +1707,7 @@ func newBlockingOnePasswordRuntime(documents map[string][]byte) *blockingOnePass
 	return &blockingOnePasswordRuntime{
 		documents: copied,
 		release:   make(chan struct{}),
+		releaseAt: 2,
 	}
 }
 
@@ -1578,8 +1721,17 @@ func (f *fakeOnePasswordRuntime) CreateDocument(vault, title string, tags []stri
 }
 
 func (f *fakeOnePasswordRuntime) ReadDocument(vault, itemID string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readCalls++
 	data := f.documents[itemID]
 	return append([]byte(nil), data...), nil
+}
+
+func (f *fakeOnePasswordRuntime) readCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.readCalls
 }
 
 func (f *fakeOnePasswordRuntime) UpdateDocument(vault, itemID string, data []byte) error {
@@ -1610,7 +1762,7 @@ func (b *blockingOnePasswordRuntime) ReadDocument(vault, itemID string) ([]byte,
 	if b.currentReads > b.maxConcurrent {
 		b.maxConcurrent = b.currentReads
 	}
-	if b.maxConcurrent >= 2 {
+	if b.maxConcurrent >= b.releaseAt {
 		select {
 		case <-b.release:
 		default:
