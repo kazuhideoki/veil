@@ -234,11 +234,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		var allWorkspaces bool
 		var repo string
-		var refresh bool
 		var verbose bool
 		emergeFlags.BoolVar(&allWorkspaces, "all", false, "emerge registered targets for all workspaces")
 		emergeFlags.StringVar(&repo, "repo", "", "emerge registered targets for the named repo")
-		emergeFlags.BoolVar(&refresh, "refresh", false, "fetch 1Password documents even when active leases can be reused")
 		emergeFlags.BoolVar(&verbose, "verbose", false, "show emerge timing details")
 
 		if err := emergeFlags.Parse(args[1:]); err != nil {
@@ -255,7 +253,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
 			Repo:            repo,
-			Refresh:         refresh,
 		}
 		if verbose {
 			runner.VerboseOutput = stderr

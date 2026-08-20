@@ -45,9 +45,6 @@ veil emerge
 # make managed files appear in a named repo from any directory
 veil emerge --repo myapp
 
-# force active materializations to be refreshed from 1Password
-veil emerge --all --refresh
-
 # show lock, cleanup, authentication, and per-document timing
 veil emerge --all --verbose
 
@@ -92,7 +89,7 @@ veil ttl-agent install --interval 60
 
 `default_ttl` controls how long a materialized file lease is valid. Expired clean files are removed by `veil ttl-cleaner`, and modified files are kept so local edits are not lost.
 
-`veil emerge` reuses an unexpired materialization when its path, 1Password item, and local content hash still match the recorded lease. Reuse keeps the original expiration time, so Veil reauthenticates and downloads the document after the lease expires. Use `veil emerge --refresh` to fetch the current 1Password document before then.
+`veil emerge` fetches the current 1Password document and renews the lease expiration for every successfully materialized target, including targets that are already emerged.
 
 `veil emerge --verbose` writes state-lock wait time, TTL maintenance time, per-document 1Password read time, and total emerge time to standard error. In `--all` mode it also reports the separate 1Password authentication time. `veil emerge --all` downloads documents with up to eight concurrent workers.
 
