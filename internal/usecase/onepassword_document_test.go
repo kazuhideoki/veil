@@ -353,10 +353,14 @@ func TestEmergeTargetsAllWorkspacesUsesEightWorkers(t *testing.T) {
 	}
 }
 
-func TestEmergeTargetsAllWorkspacesReusesMatchingActiveLease(t *testing.T) {
+func TestEmergeTargetsAllWorkspacesRefreshesMatchingActiveLease(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	workspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
 	localData := []byte("TOKEN=local\n")
 	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(localData))
 	targetPath := filepath.Join(workspaceRoot, ".env")
@@ -373,60 +377,7 @@ func TestEmergeTargetsAllWorkspacesReusesMatchingActiveLease(t *testing.T) {
 	defer restoreWD()
 
 	runtime := newFakeOnePasswordRuntime()
-	runtime.documents["item-1"] = []byte("TOKEN=remote\n")
-	var verbose bytes.Buffer
-	uc := EmergeTargets{
-		FileSystem:      infra.OSFileSystem{},
-		DocumentRuntime: runtime,
-		Stdout:          &bytes.Buffer{},
-		VerboseOutput:   &verbose,
-		Now:             func() time.Time { return now },
-		AllWorkspaces:   true,
-	}
-
-	if err := uc.Run(); err != nil {
-		t.Fatalf("Run() returned error: %v", err)
-	}
-	if got := runtime.readCount(); got != 0 {
-		t.Fatalf("ReadDocument() calls = %d, want 0", got)
-	}
-	if data, err := os.ReadFile(targetPath); err != nil || string(data) != string(localData) {
-		t.Fatalf("workspace data = %q, %v", data, err)
-	}
-	if !strings.Contains(verbose.String(), "reused active lease: myapp:.env") {
-		t.Fatalf("verbose output = %q", verbose.String())
-	}
-	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
-	lease, ok, err := refreshed.FindLease("myapp", ".env")
-	if err != nil || !ok {
-		t.Fatalf("FindLease() = %#v, %v, %v", lease, ok, err)
-	}
-	if !lease.ExpiresAt.Equal(now.Add(time.Hour)) {
-		t.Fatalf("ExpiresAt = %v, want original lease expiration", lease.ExpiresAt)
-	}
-}
-
-func TestEmergeTargetsRefreshFetchesMatchingActiveLease(t *testing.T) {
-	tempHome := t.TempDir()
-	t.Setenv("HOME", tempHome)
-	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
-	localData := []byte("TOKEN=local\n")
 	remoteData := []byte("TOKEN=remote\n")
-	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(localData))
-	targetPath := filepath.Join(workspaceRoot, ".env")
-	if err := os.WriteFile(targetPath, localData, 0o600); err != nil {
-		t.Fatalf("WriteFile() returned error: %v", err)
-	}
-	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
-	state := domain.DefaultState()
-	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, targetPath, "item-1", sha256Hex(localData)); err != nil {
-		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
-	}
-	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
-	restoreWD := chdirForTest(t, tempHome)
-	defer restoreWD()
-
-	runtime := newFakeOnePasswordRuntime()
 	runtime.documents["item-1"] = remoteData
 	var verbose bytes.Buffer
 	uc := EmergeTargets{
@@ -436,7 +387,6 @@ func TestEmergeTargetsRefreshFetchesMatchingActiveLease(t *testing.T) {
 		VerboseOutput:   &verbose,
 		Now:             func() time.Time { return now },
 		AllWorkspaces:   true,
-		Refresh:         true,
 	}
 
 	if err := uc.Run(); err != nil {
@@ -450,6 +400,71 @@ func TestEmergeTargetsRefreshFetchesMatchingActiveLease(t *testing.T) {
 	}
 	if !strings.Contains(verbose.String(), "1Password read completed: myapp:.env") {
 		t.Fatalf("verbose output = %q", verbose.String())
+	}
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	lease, ok, err := refreshed.FindLease("myapp", ".env")
+	if err != nil || !ok {
+		t.Fatalf("FindLease() = %#v, %v, %v", lease, ok, err)
+	}
+	if !lease.ExpiresAt.Equal(now.Add(24 * time.Hour)) {
+		t.Fatalf("ExpiresAt = %v, want renewed lease expiration", lease.ExpiresAt)
+	}
+}
+
+func TestEmergeTargetsRefreshesMatchingActiveLease(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	workspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	localData := []byte("TOKEN=local\n")
+	remoteData := []byte("TOKEN=remote\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(localData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, localData, 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, targetPath, "item-1", sha256Hex(localData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = remoteData
+	var verbose bytes.Buffer
+	uc := EmergeTargets{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		VerboseOutput:   &verbose,
+		Now:             func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if got := runtime.readCount(); got != 1 {
+		t.Fatalf("ReadDocument() calls = %d, want 1", got)
+	}
+	if data, err := os.ReadFile(targetPath); err != nil || string(data) != string(remoteData) {
+		t.Fatalf("workspace data = %q, %v", data, err)
+	}
+	if !strings.Contains(verbose.String(), "1Password read: .env") {
+		t.Fatalf("verbose output = %q", verbose.String())
+	}
+	refreshed := readStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"))
+	lease, ok, err := refreshed.FindLease("myapp", ".env")
+	if err != nil || !ok {
+		t.Fatalf("FindLease() = %#v, %v, %v", lease, ok, err)
+	}
+	if !lease.ExpiresAt.Equal(now.Add(24 * time.Hour)) {
+		t.Fatalf("ExpiresAt = %v, want renewed lease expiration", lease.ExpiresAt)
 	}
 }
 
@@ -1180,6 +1195,54 @@ func TestEmergeTargetsRollsBackCreatedOnePasswordFilesWhenStateWriteFails(t *tes
 	}
 	if _, statErr := os.Stat(filepath.Join(workspaceRoot, ".env")); !os.IsNotExist(statErr) {
 		t.Fatalf("workspace target still exists after rollback, err=%v", statErr)
+	}
+}
+
+func TestEmergeTargetsRestoresRefreshedFileWhenStateWriteFails(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	workspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	oldData := []byte("TOKEN=old\n")
+	newData := []byte("TOKEN=new\n")
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex(oldData))
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, oldData, 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	state := domain.DefaultState()
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, targetPath, "item-1", sha256Hex(oldData)); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, workspaceRoot)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = newData
+	uc := EmergeTargets{
+		FileSystem: failingStateWriteFS{
+			homeDir:       tempHome,
+			stateWriteErr: errors.New("state write failed"),
+		},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		Now:             func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err == nil {
+		t.Fatal("Run() returned nil error")
+	}
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("ReadFile(target) returned error: %v", err)
+	}
+	if string(data) != string(oldData) {
+		t.Fatalf("workspace data = %q, want restored %q", data, oldData)
 	}
 }
 

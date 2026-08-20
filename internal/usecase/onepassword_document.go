@@ -128,6 +128,8 @@ func writeConfig(fs stateFileSystem, configPath string, config domain.Config) er
 
 type materializedFileResult struct {
 	created         bool
+	overwritten     bool
+	previousData    []byte
 	expiredModified bool
 }
 
@@ -206,7 +208,7 @@ func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID
 	if err := fs.WriteFile(workspaceTargetPath, data, 0o600); err != nil {
 		return materializedFileResult{}, fmt.Errorf("write workspace target: %w", err)
 	}
-	return materializedFileResult{}, nil
+	return materializedFileResult{overwritten: true, previousData: currentData}, nil
 }
 
 type updateOnePasswordOptions struct {

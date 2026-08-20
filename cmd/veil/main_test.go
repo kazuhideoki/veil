@@ -36,6 +36,13 @@ func TestRunUpdateCommandIsRemoved(t *testing.T) {
 	}
 }
 
+func TestRunEmergeRefreshFlagIsRemoved(t *testing.T) {
+	err := run([]string{"emerge", "--refresh"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -refresh") {
+		t.Fatalf("run(emerge --refresh) error = %v", err)
+	}
+}
+
 func TestWriteErrorPrintsErrorInRed(t *testing.T) {
 	var stderr bytes.Buffer
 
