@@ -54,6 +54,9 @@ veil edit .env
 # inspect local materialized edits before committing them
 veil diff .env
 
+# inspect one materialized edit from any directory
+veil diff myapp:.env
+
 # commit materialized edits back to 1Password
 veil commit .env
 
@@ -62,6 +65,9 @@ veil commit myapp:.env
 
 # explicitly overwrite a remotely changed 1Password document after resolving a conflict
 veil commit --overwrite-remote .env
+
+# explicitly replace an edited materialized file with the 1Password document
+veil emerge --overwrite-local myapp:.env
 
 # remove materialized files from the workspace
 veil vanish
@@ -88,7 +94,7 @@ veil workspace purge --yes
 veil ttl-agent install --interval 60
 ```
 
-`veil emerge`, `veil commit`, and `veil vanish` accept `workspace_id:target` when they must address one registered file outside the current workspace. For example, `myapp:.env` and `myapp:config/service-account.json` identify two distinct targets in the same workspace. Within the active workspace, the shorter relative target path remains available.
+`veil emerge`, `veil commit`, `veil diff`, and `veil vanish` accept `workspace_id:target` when they must address one registered file outside the current workspace. For example, `myapp:.env` and `myapp:config/service-account.json` identify two distinct targets in the same workspace. Within the active workspace, the shorter relative target path remains available.
 
 With no target ref, `veil emerge` and `veil vanish` operate on every registered target in the active workspace. `--all` operates on every registered workspace and cannot be combined with a target ref.
 
@@ -97,6 +103,8 @@ With no target ref, `veil emerge` and `veil vanish` operate on every registered 
 `default_ttl` controls how long a materialized file lease is valid. Expired clean files are removed by `veil ttl-cleaner`, and modified files are kept so local edits are not lost.
 
 `veil emerge` fetches the current 1Password document and renews the lease expiration for every successfully materialized target, including targets that are already emerged.
+
+`veil status` reports a modified file whose lease has expired as `expired-modified`. `veil commit` can safely commit that file using the last sync hash as its baseline and renews the lease after a successful remote conflict check. To discard the local changes instead, use `veil emerge --overwrite-local workspace_id:target`. The overwrite flag requires one target and cannot be combined with `--all`.
 
 `veil emerge --verbose` writes state-lock wait time, TTL maintenance time, per-document 1Password read time, and total emerge time to standard error. In `--all` mode it also reports the separate 1Password authentication time. `veil emerge --all` downloads documents with up to eight concurrent workers.
 
@@ -107,6 +115,7 @@ With no target ref, `veil emerge` and `veil vanish` operate on every registered 
 ```bash
 veil diff
 veil diff .env
+veil diff myapp:.env
 veil diff --summary
 ```
 

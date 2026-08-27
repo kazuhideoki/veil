@@ -43,6 +43,18 @@ func TestRunEmergeRefreshFlagIsRemoved(t *testing.T) {
 	}
 }
 
+func TestRunEmergeOverwriteLocalRequiresOneTarget(t *testing.T) {
+	for _, args := range [][]string{
+		{"emerge", "--overwrite-local"},
+		{"emerge", "--all", "--overwrite-local"},
+	} {
+		err := run(args, &bytes.Buffer{}, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "emerge --overwrite-local requires exactly one target ref") {
+			t.Fatalf("run(%v) error = %v", args, err)
+		}
+	}
+}
+
 func TestRunRepoFlagIsRemovedFromTargetCommands(t *testing.T) {
 	for _, command := range []string{"commit", "emerge", "vanish"} {
 		err := run([]string{command, "--repo", "myapp"}, &bytes.Buffer{}, &bytes.Buffer{})
