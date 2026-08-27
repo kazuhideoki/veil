@@ -106,7 +106,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		commitFlags.SetOutput(stderr)
 
 		var overwriteRemote bool
+		var repo string
 		commitFlags.BoolVar(&overwriteRemote, "overwrite-remote", false, "overwrite a changed 1Password document with the workspace target")
+		commitFlags.StringVar(&repo, "repo", "", "commit a target in the named repo")
 
 		if err := commitFlags.Parse(args[1:]); err != nil {
 			return err
@@ -121,6 +123,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			TargetPath:      commitFlags.Arg(0),
+			Repo:            repo,
 			OverwriteRemote: overwriteRemote,
 		}
 

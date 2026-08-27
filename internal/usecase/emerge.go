@@ -552,29 +552,7 @@ func resolveEmergeWorkspaces(fs workspaceResolverFileSystem, config domain.Confi
 		return workspaces, nil
 	}
 
-	if repo != "" {
-		workspace, ok := config.Workspaces[repo]
-		if !ok {
-			return nil, fmt.Errorf("repo is not registered: %s", repo)
-		}
-
-		return []emergeWorkspace{{
-			id:        repo,
-			workspace: workspace,
-		}}, nil
-	}
-
-	currentDir, err := fs.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("resolve current directory: %w", err)
-	}
-
-	currentDir, err = fs.EvalSymlinks(currentDir)
-	if err != nil {
-		return nil, fmt.Errorf("canonicalize current directory: %w", err)
-	}
-
-	workspaceID, workspace, err := config.ResolveWorkspaceByDir(currentDir)
+	workspaceID, workspace, err := resolveSelectedWorkspace(fs, config, repo)
 	if err != nil {
 		return nil, err
 	}

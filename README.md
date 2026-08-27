@@ -57,6 +57,9 @@ veil diff .env
 # commit materialized edits back to 1Password
 veil commit .env
 
+# commit a materialized edit in a named repo from any directory
+veil commit --repo myapp .env
+
 # explicitly overwrite a remotely changed 1Password document after resolving a conflict
 veil commit --overwrite-remote .env
 

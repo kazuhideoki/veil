@@ -650,6 +650,88 @@ func TestCommitTargetCommitsMaterializedOnePasswordDocument(t *testing.T) {
 	}
 }
 
+func TestCommitTargetSelectsRepoOutsideWorkspace(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldData := []byte("TOKEN=old\n")
+	newData := []byte("TOKEN=new\n")
+	oldHash := sha256Hex(oldData)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", oldHash)
+	targetPath := filepath.Join(workspaceRoot, ".env")
+	if err := os.WriteFile(targetPath, newData, 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	resolvedTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, resolvedTargetPath, "item-1", oldHash); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = oldData
+	uc := CommitTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		TargetPath:      ".env",
+		Repo:            "myapp",
+		Now:             func() time.Time { return now },
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if got := string(runtime.documents["item-1"]); got != string(newData) {
+		t.Fatalf("document data = %q", got)
+	}
+}
+
+func TestCommitTargetWithRepoRejectsUnboundLease(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	oldData := []byte("TOKEN=old\n")
+	oldHash := sha256Hex(oldData)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", oldHash)
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".env"), []byte("TOKEN=new\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	state := domain.DefaultState()
+	now := time.Date(2026, 5, 21, 1, 2, 3, 0, time.UTC)
+	if err := state.UpsertLeaseWithHash("myapp", ".env", now.Add(-time.Hour), now.Add(time.Hour), onePasswordStoreID, "", "", oldHash); err != nil {
+		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
+	}
+	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = oldData
+	err := (CommitTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		TargetPath:      ".env",
+		Repo:            "myapp",
+		Now:             func() time.Time { return now },
+	}).Run()
+
+	if err == nil || !strings.Contains(err.Error(), "lease is not bound to the selected repo") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := string(runtime.documents["item-1"]); got != string(oldData) {
+		t.Fatalf("document data = %q", got)
+	}
+}
+
 func TestCommitTargetRejectsRemoteConflict(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
