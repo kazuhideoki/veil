@@ -44,6 +44,14 @@ func ParseStateTOML(data []byte) (State, error) {
 	if state.Leases == nil {
 		state.Leases = []Lease{}
 	}
+	for idx, lease := range state.Leases {
+		if err := validateWorkspaceID(lease.WorkspaceID); err != nil {
+			return State{}, fmt.Errorf("lease %d workspace %q: %w", idx, lease.WorkspaceID, err)
+		}
+		if _, err := normalizeTargetPath(lease.Target); err != nil {
+			return State{}, fmt.Errorf("lease %d target %q: %w", idx, lease.Target, err)
+		}
+	}
 
 	return state, nil
 }

@@ -30,7 +30,7 @@ type VanishTargets struct {
 	Stdout          io.Writer
 	Now             func() time.Time
 	AllWorkspaces   bool
-	Repo            string
+	TargetRef       string
 	Commit          bool
 	Discard         bool
 }
@@ -58,7 +58,7 @@ func (u VanishTargets) Run() error {
 		return err
 	}
 
-	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces, u.Repo)
+	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces, u.TargetRef)
 	if err != nil {
 		return err
 	}
@@ -117,6 +117,16 @@ func (u VanishTargets) vanishOnePasswordDocuments(config domain.Config, statePat
 				}
 				return wrappedErr
 			}
+			document, err := validateVanishLeaseBinding(config, entry.id, target, workspaceTargetPath, lease, u.TargetRef != "")
+			if err != nil {
+				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, err)
+				if u.AllWorkspaces {
+					outputLayout.writeTargetFailure(u.Stdout, entry.id, target, wrappedErr)
+					vanishErr = errors.Join(vanishErr, wrappedErr)
+					continue
+				}
+				return wrappedErr
+			}
 			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 				wrappedErr := wrapVanishTargetError(u.AllWorkspaces, entry.id, target, fmt.Errorf("workspace target must be a Veil materialized regular file"))
 				if u.AllWorkspaces {
@@ -151,13 +161,6 @@ func (u VanishTargets) vanishOnePasswordDocuments(config domain.Config, statePat
 				return wrappedErr
 			}
 			if u.Commit {
-				document, ok, err := config.DocumentForTarget(entry.id, target)
-				if err == nil && !ok {
-					err = fmt.Errorf("1Password document is not registered: %s", target)
-				}
-				if err != nil {
-					return err
-				}
 				updatedDocument, _, err := updateOnePasswordDocument(u.DocumentRuntime, config, document, data, lease.PlaintextHash)
 				if err != nil {
 					return fmt.Errorf("%s: %w", target, err)
@@ -202,6 +205,30 @@ func (u VanishTargets) vanishOnePasswordDocuments(config domain.Config, statePat
 		return vanishErr
 	}
 	return nil
+}
+
+// validateVanishLeaseBinding prevents a selected ref from deleting a file outside its recorded lease.
+func validateVanishLeaseBinding(config domain.Config, workspaceID, target, workspaceTargetPath string, lease domain.Lease, requireBound bool) (domain.DocumentConfig, error) {
+	document, ok, err := config.DocumentForTarget(workspaceID, target)
+	if err != nil {
+		return domain.DocumentConfig{}, err
+	}
+	if !ok {
+		return domain.DocumentConfig{}, fmt.Errorf("1Password document is not registered: %s", target)
+	}
+	if requireBound && (lease.WorkspacePath == "" || lease.StorePath == "") {
+		return domain.DocumentConfig{}, fmt.Errorf("target lease is not bound to the selected target; re-run veil emerge %s", formatTargetRef(workspaceID, target))
+	}
+	if lease.StoreID != onePasswordStoreID {
+		return domain.DocumentConfig{}, fmt.Errorf("target is not emerged from 1Password document store: %s", target)
+	}
+	if lease.StorePath != "" && lease.StorePath != document.ItemID {
+		return domain.DocumentConfig{}, fmt.Errorf("target lease does not match registered 1Password document: %s", target)
+	}
+	if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
+		return domain.DocumentConfig{}, fmt.Errorf("target workspace path does not match active lease: %s", target)
+	}
+	return document, nil
 }
 
 type vanishOutputLayout struct {

@@ -26,7 +26,6 @@ type CommitTarget struct {
 	DocumentRuntime OnePasswordDocumentRuntime
 	Stdout          io.Writer
 	TargetPath      string
-	Repo            string
 	Now             func() time.Time
 	OverwriteRemote bool
 }
@@ -49,17 +48,13 @@ func (u CommitTarget) Run() error {
 		return err
 	}
 
-	workspaceID, workspace, err := resolveSelectedWorkspace(u.FileSystem, config, u.Repo)
+	selection, err := resolveTargetSelection(u.FileSystem, config, u.TargetPath)
 	if err != nil {
 		return err
 	}
-	targetPath, err := normalizeEditTargetPath(u.TargetPath)
-	if err != nil {
-		return err
-	}
-	if !hasTarget(workspace.Targets, targetPath) {
-		return fmt.Errorf("target is not registered: %s", targetPath)
-	}
+	workspaceID := selection.workspaceID
+	workspace := selection.workspace
+	targetPath := selection.target
 	document, ok, err := config.DocumentForTarget(workspaceID, targetPath)
 	if err != nil {
 		return err
@@ -80,8 +75,8 @@ func (u CommitTarget) Run() error {
 	if !ok {
 		return fmt.Errorf("target is not emerged: %s", targetPath)
 	}
-	if u.Repo != "" && (lease.WorkspacePath == "" || lease.StorePath == "") {
-		return fmt.Errorf("target lease is not bound to the selected repo; re-run veil emerge --repo %s: %s", u.Repo, targetPath)
+	if selection.explicitWorkspace && (lease.WorkspacePath == "" || lease.StorePath == "") {
+		return fmt.Errorf("target lease is not bound to the selected workspace; re-run veil emerge %s", formatTargetRef(workspaceID, targetPath))
 	}
 	if lease.StoreID != onePasswordStoreID {
 		return fmt.Errorf("target is not emerged from 1Password document store: %s", targetPath)

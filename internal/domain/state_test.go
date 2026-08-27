@@ -100,6 +100,21 @@ func TestParseStateTOMLRoundTripsRenderedState(t *testing.T) {
 	}
 }
 
+func TestParseStateTOMLRejectsStoredTargetRefSeparators(t *testing.T) {
+	for name, identity := range map[string]string{
+		"workspace": "workspace_id = \"team:api\"\ntarget = \".env\"",
+		"target":    "workspace_id = \"myapp\"\ntarget = \"config:secret\"",
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := "version = 2\n\n[[leases]]\n" + identity + "\nmounted_at = 2026-04-01T00:00:00Z\nexpires_at = 2026-04-01T01:00:00Z\n"
+			_, err := ParseStateTOML([]byte(data))
+			if err == nil || !strings.Contains(err.Error(), "target ref separator") {
+				t.Fatalf("ParseStateTOML() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestStateLeaseRendersOnePasswordDocumentReference(t *testing.T) {
 	state := DefaultState()
 	mountedAt := time.Date(2026, 5, 13, 10, 0, 0, 0, time.UTC)

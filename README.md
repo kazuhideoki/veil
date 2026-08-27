@@ -42,8 +42,8 @@ veil add config/secrets
 # also ensures the macOS TTL cleanup agent is installed
 veil emerge
 
-# make managed files appear in a named repo from any directory
-veil emerge --repo myapp
+# make one managed file appear from any directory
+veil emerge myapp:.env
 
 # show lock, cleanup, authentication, and per-document timing
 veil emerge --all --verbose
@@ -57,8 +57,8 @@ veil diff .env
 # commit materialized edits back to 1Password
 veil commit .env
 
-# commit a materialized edit in a named repo from any directory
-veil commit --repo myapp .env
+# commit a materialized edit from any directory
+veil commit myapp:.env
 
 # explicitly overwrite a remotely changed 1Password document after resolving a conflict
 veil commit --overwrite-remote .env
@@ -66,8 +66,8 @@ veil commit --overwrite-remote .env
 # remove materialized files from the workspace
 veil vanish
 
-# remove materialized files from a named repo from any directory
-veil vanish --repo myapp
+# remove one materialized file from any directory
+veil vanish myapp:.env
 
 # remove materialized files from every registered workspace
 veil vanish --all
@@ -87,6 +87,10 @@ veil workspace purge --yes
 # manually repair or change the background cleanup interval
 veil ttl-agent install --interval 60
 ```
+
+`veil emerge`, `veil commit`, and `veil vanish` accept `workspace_id:target` when they must address one registered file outside the current workspace. For example, `myapp:.env` and `myapp:config/service-account.json` identify two distinct targets in the same workspace. Within the active workspace, the shorter relative target path remains available.
+
+With no target ref, `veil emerge` and `veil vanish` operate on every registered target in the active workspace. `--all` operates on every registered workspace and cannot be combined with a target ref.
 
 ## TTL Cleanup
 
