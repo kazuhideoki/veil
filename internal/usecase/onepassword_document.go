@@ -80,6 +80,14 @@ func authenticateOnePasswordRuntime(runtime OnePasswordDocumentRuntime) error {
 }
 
 func validateOnePasswordMaterializedTarget(fs onePasswordMaterializedFileSystem, lease domain.Lease, workspaceTargetPath, targetPath, itemID string, now time.Time) ([]byte, error) {
+	if !lease.ExpiresAt.After(now) {
+		return nil, fmt.Errorf("target lease is expired; re-run veil emerge before commit: %s", targetPath)
+	}
+	return readOnePasswordMaterializedTarget(fs, lease, workspaceTargetPath, targetPath, itemID)
+}
+
+// readOnePasswordMaterializedTarget validates provenance without treating TTL expiry as lost sync history.
+func readOnePasswordMaterializedTarget(fs onePasswordMaterializedFileSystem, lease domain.Lease, workspaceTargetPath, targetPath, itemID string) ([]byte, error) {
 	if lease.StoreID != onePasswordStoreID {
 		return nil, fmt.Errorf("target is not emerged from 1Password document store: %s", targetPath)
 	}
@@ -88,9 +96,6 @@ func validateOnePasswordMaterializedTarget(fs onePasswordMaterializedFileSystem,
 	}
 	if lease.PlaintextHash == "" {
 		return nil, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before commit: %s", targetPath)
-	}
-	if !lease.ExpiresAt.After(now) {
-		return nil, fmt.Errorf("target lease is expired; re-run veil emerge before commit: %s", targetPath)
 	}
 	if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
 		return nil, fmt.Errorf("target workspace path does not match active lease: %s", targetPath)
@@ -133,7 +138,7 @@ type materializedFileResult struct {
 	expiredModified bool
 }
 
-func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID, target, workspaceTargetPath, itemID string, data []byte, now time.Time) (materializedFileResult, error) {
+func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID, target, workspaceTargetPath, itemID string, data []byte, now time.Time, overwriteLocal bool) (materializedFileResult, error) {
 	info, err := fs.Lstat(workspaceTargetPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -174,27 +179,31 @@ func ensureMaterializedFile(fs emergeFileSystem, state domain.State, workspaceID
 		}
 		if !lease.ExpiresAt.After(now) {
 			if lease.PlaintextHash == "" {
-				if sha256Hex(currentData) != sha256Hex(data) {
+				if sha256Hex(currentData) != sha256Hex(data) && !overwriteLocal {
 					return materializedFileResult{expiredModified: true}, nil
 				}
-				return materializedFileResult{}, nil
+				if !overwriteLocal {
+					return materializedFileResult{}, nil
+				}
 			}
 			currentHash := sha256Hex(currentData)
 			remoteHash := sha256Hex(data)
-			if currentHash != lease.PlaintextHash && currentHash != remoteHash {
+			if currentHash != lease.PlaintextHash && currentHash != remoteHash && !overwriteLocal {
 				return materializedFileResult{expiredModified: true}, nil
 			}
 		} else {
 			if lease.PlaintextHash == "" {
-				if sha256Hex(currentData) != sha256Hex(data) {
+				if sha256Hex(currentData) != sha256Hex(data) && !overwriteLocal {
 					return materializedFileResult{}, fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before commit: %s", target)
 				}
-				return materializedFileResult{}, nil
+				if !overwriteLocal {
+					return materializedFileResult{}, nil
+				}
 			}
-			if _, err := validateOnePasswordMaterializedTarget(fs, lease, workspaceTargetPath, target, itemID, now); err != nil {
+			if _, err := readOnePasswordMaterializedTarget(fs, lease, workspaceTargetPath, target, itemID); err != nil {
 				return materializedFileResult{}, err
 			}
-			if sha256Hex(currentData) != lease.PlaintextHash {
+			if sha256Hex(currentData) != lease.PlaintextHash && !overwriteLocal {
 				return materializedFileResult{}, fmt.Errorf("workspace target has uncommitted changes: %s", target)
 			}
 		}

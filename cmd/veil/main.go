@@ -234,8 +234,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 		var allWorkspaces bool
 		var verbose bool
+		var overwriteLocal bool
 		emergeFlags.BoolVar(&allWorkspaces, "all", false, "emerge registered targets for all workspaces")
 		emergeFlags.BoolVar(&verbose, "verbose", false, "show emerge timing details")
+		emergeFlags.BoolVar(&overwriteLocal, "overwrite-local", false, "replace a locally modified target with the 1Password document")
 
 		if err := emergeFlags.Parse(args[1:]); err != nil {
 			return err
@@ -255,6 +257,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
 			TargetRef:       targetRef,
+			OverwriteLocal:  overwriteLocal,
 		}
 		if verbose {
 			runner.VerboseOutput = stderr
@@ -357,19 +360,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		if diffFlags.NArg() > 1 {
-			return fmt.Errorf("diff accepts at most one target path")
+			return fmt.Errorf("diff accepts at most one target ref")
 		}
 
-		targetPath := ""
+		targetRef := ""
 		if diffFlags.NArg() == 1 {
-			targetPath = diffFlags.Arg(0)
+			targetRef = diffFlags.Arg(0)
 		}
 
 		runner := usecase.DiffTargets{
 			FileSystem:      infra.OSFileSystem{},
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
-			TargetPath:      targetPath,
+			TargetRef:       targetRef,
 			AllWorkspaces:   allWorkspaces,
 			Summary:         summary,
 			ColorOutput:     writerSupportsColor(stdout),

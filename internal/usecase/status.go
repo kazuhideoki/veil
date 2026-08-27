@@ -162,20 +162,26 @@ func detectOnePasswordTargetStatus(fs statusFileSystem, config domain.Config, st
 	if !ok || lease.StoreID != onePasswordStoreID || lease.StorePath != document.ItemID || lease.PlaintextHash == "" {
 		return workspaceTargetStatus{State: "untracked"}, nil
 	}
-	if !lease.ExpiresAt.After(now) {
-		return workspaceTargetStatus{State: "expired"}, nil
-	}
 	if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
 		return workspaceTargetStatus{State: "untracked"}, nil
 	}
 
-	ttlRemaining := formatTTLRemaining(lease.ExpiresAt.Sub(now))
 	data, err := fs.ReadFile(workspaceTargetPath)
 	if err != nil {
 		return workspaceTargetStatus{}, fmt.Errorf("read workspace target: %w", err)
 	}
 	sum := sha256.Sum256(data)
-	if hex.EncodeToString(sum[:]) != lease.PlaintextHash {
+	modified := hex.EncodeToString(sum[:]) != lease.PlaintextHash
+	expired := !lease.ExpiresAt.After(now)
+	if expired && modified {
+		return workspaceTargetStatus{State: "expired-modified"}, nil
+	}
+	if expired {
+		return workspaceTargetStatus{State: "expired"}, nil
+	}
+
+	ttlRemaining := formatTTLRemaining(lease.ExpiresAt.Sub(now))
+	if modified {
 		return workspaceTargetStatus{State: "modified", TTLRemaining: ttlRemaining}, nil
 	}
 	return workspaceTargetStatus{State: "materialized", TTLRemaining: ttlRemaining}, nil

@@ -84,13 +84,10 @@ func (u CommitTarget) Run() error {
 	if lease.PlaintextHash == "" {
 		return fmt.Errorf("target has no recorded plaintext hash; re-run veil emerge before commit: %s", targetPath)
 	}
-	if !lease.ExpiresAt.After(currentTime(u.Now)) {
-		return fmt.Errorf("target lease is expired; re-run veil emerge before commit: %s", targetPath)
-	}
 	if lease.WorkspacePath != "" && filepath.Clean(lease.WorkspacePath) != filepath.Clean(workspaceTargetPath) {
 		return fmt.Errorf("target workspace path does not match active lease: %s", targetPath)
 	}
-	workspaceData, err := validateOnePasswordMaterializedTarget(u.FileSystem, lease, workspaceTargetPath, targetPath, document.ItemID, currentTime(u.Now))
+	workspaceData, err := readOnePasswordMaterializedTarget(u.FileSystem, lease, workspaceTargetPath, targetPath, document.ItemID)
 	if err != nil {
 		return err
 	}

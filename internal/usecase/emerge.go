@@ -41,6 +41,7 @@ type EmergeTargets struct {
 	Now             func() time.Time
 	AllWorkspaces   bool
 	TargetRef       string
+	OverwriteLocal  bool
 }
 
 type emergeWorkspace struct {
@@ -71,6 +72,9 @@ func (u EmergeTargets) ValidateWorkspaceSelection() error {
 }
 
 func (u EmergeTargets) resolveWorkspaces() (string, domain.Config, []emergeWorkspace, error) {
+	if u.OverwriteLocal && (u.AllWorkspaces || u.TargetRef == "") {
+		return "", domain.Config{}, nil, fmt.Errorf("emerge --overwrite-local requires exactly one target ref")
+	}
 	configPath, config, err := loadConfig(u.FileSystem)
 	if err != nil {
 		return "", domain.Config{}, nil, err
@@ -163,7 +167,7 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 				return wrappedErrOrRollback(u.FileSystem, statePath, originalState, targetChanges, wrappedErr)
 			}
 
-			materialized, err := ensureMaterializedFile(u.FileSystem, *state, entry.id, target, workspaceTargetPath, document.ItemID, data, now)
+			materialized, err := ensureMaterializedFile(u.FileSystem, *state, entry.id, target, workspaceTargetPath, document.ItemID, data, now, u.OverwriteLocal)
 			if err != nil {
 				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err)
 				if u.AllWorkspaces {
@@ -174,8 +178,7 @@ func (u EmergeTargets) emergeOnePasswordDocuments(configPath string, config doma
 				return wrappedErrOrRollback(u.FileSystem, statePath, originalState, targetChanges, wrappedErr)
 			}
 			if materialized.expiredModified {
-				outputLayout.writeTargetExpiredModified(u.Stdout, entry.id, emergeTargetLabel(u.AllWorkspaces, entry.id, target), target, u.TargetRef, entry.workspace.Root)
-				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, expiredModifiedEmergeError(target, u.AllWorkspaces, u.TargetRef, entry.workspace.Root))
+				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, expiredModifiedEmergeError(entry.id, target, u.AllWorkspaces, u.TargetRef))
 				emergeErr = errors.Join(emergeErr, wrappedErr)
 				continue
 			}
@@ -325,7 +328,7 @@ func (u EmergeTargets) emergeOnePasswordWorkspaces(configPath string, config dom
 	for _, result := range results {
 		if result.err != nil {
 			if result.expiredModified {
-				outputLayout.writeTargetExpiredModified(u.Stdout, result.workspaceID, emergeTargetLabel(true, result.workspaceID, result.target), result.target, "", "")
+				outputLayout.writeTargetExpiredModified(u.Stdout, result.workspaceID, result.target)
 				emergeErr = errors.Join(emergeErr, result.err)
 				continue
 			}
@@ -430,14 +433,14 @@ func runEmergeOnePasswordTask(fs emergeFileSystem, runtime OnePasswordDocumentRu
 
 	workspaceTargetPath := filepath.Join(task.workspace.Root, task.target)
 	result.workspaceTargetPath = workspaceTargetPath
-	materialized, err := ensureMaterializedFile(fs, state, task.workspaceID, task.target, workspaceTargetPath, task.document.ItemID, data, now)
+	materialized, err := ensureMaterializedFile(fs, state, task.workspaceID, task.target, workspaceTargetPath, task.document.ItemID, data, now, false)
 	if err != nil {
 		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, err)
 		return result
 	}
 	if materialized.expiredModified {
 		result.expiredModified = true
-		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, expiredModifiedEmergeError(task.target, true, "", ""))
+		result.err = wrapEmergeTargetError(true, task.workspaceID, task.target, expiredModifiedEmergeError(task.workspaceID, task.target, true, ""))
 		return result
 	}
 	result.created = materialized.created
@@ -473,7 +476,7 @@ type emergeOutputLayout struct {
 func newEmergeOutputLayout(allWorkspaces bool, workspaces []emergeWorkspace) emergeOutputLayout {
 	layout := emergeOutputLayout{
 		allWorkspaces: allWorkspaces,
-		actionWidth:   len("expired modified"),
+		actionWidth:   len("expired-modified"),
 	}
 	if !allWorkspaces {
 		return layout
@@ -502,17 +505,9 @@ func (l emergeOutputLayout) writeTarget(w io.Writer, workspaceID, targetLabel, t
 	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s\n", l.actionWidth, action, l.workspaceWidth, workspaceID, target)
 }
 
-func (l emergeOutputLayout) writeTargetExpiredModified(w io.Writer, workspaceID, targetLabel, target, targetRef, workspaceRoot string) {
-	if !l.allWorkspaces {
-		if targetRef != "" {
-			fmt.Fprintf(w, "expired modified target: %s  note: uncommitted changes kept; run veil diff %s from workspace %q, then veil vanish --commit %s or veil vanish --discard %s\n", targetLabel, target, workspaceRoot, targetRef, targetRef)
-			return
-		}
-		fmt.Fprintf(w, "expired modified target: %s  note: uncommitted changes kept; run veil diff %s, then veil vanish --commit or --discard\n", targetLabel, target)
-		return
-	}
-
-	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s  note: uncommitted changes kept; run veil diff --all, then resolve in the listed repo with veil vanish --commit or --discard\n", l.actionWidth, "expired modified", l.workspaceWidth, workspaceID, target)
+func (l emergeOutputLayout) writeTargetExpiredModified(w io.Writer, workspaceID, target string) {
+	targetRef := formatTargetRef(workspaceID, target)
+	fmt.Fprintf(w, "%-*s  repo: %-*s  file: %s  note: local changes kept; inspect with veil diff %s\n", l.actionWidth, "expired-modified", l.workspaceWidth, workspaceID, target, targetRef)
 }
 
 func (l emergeOutputLayout) writeTargetFailure(w io.Writer, workspaceID, target string, err error) {
@@ -602,15 +597,18 @@ func wrapEmergeTargetError(allWorkspaces bool, workspaceID, target string, err e
 	return fmt.Errorf("%s: %w", emergeTargetLabel(allWorkspaces, workspaceID, target), err)
 }
 
-func expiredModifiedEmergeError(target string, allWorkspaces bool, targetRef, workspaceRoot string) error {
-	diffCommand := "veil diff " + target
+func expiredModifiedEmergeError(workspaceID, target string, allWorkspaces bool, requestedRef string) error {
+	ref := requestedRef
+	if ref == "" && allWorkspaces {
+		ref = formatTargetRef(workspaceID, target)
+	}
+	if ref == "" {
+		ref = target
+	}
 	if allWorkspaces {
-		diffCommand = "veil diff --all"
+		return fmt.Errorf("target is expired with local changes; run veil diff %s", ref)
 	}
-	if targetRef != "" {
-		return fmt.Errorf("target lease is expired with uncommitted changes; run %s from workspace %q, then veil vanish --commit %s or veil vanish --discard %s before emerge", diffCommand, workspaceRoot, targetRef, targetRef)
-	}
-	return fmt.Errorf("target lease is expired with uncommitted changes; run %s, then veil vanish --commit or --discard before emerge", diffCommand)
+	return fmt.Errorf("target is expired with local changes: %s\n  inspect:      veil diff %s\n  keep changes: veil commit %s\n  use remote:   veil emerge --overwrite-local %s", ref, ref, ref, ref)
 }
 
 func ensureWorkspaceRootExists(fs emergeFileSystem, workspaceRoot string) error {

@@ -26,7 +26,7 @@ type DiffTargets struct {
 	FileSystem      diffFileSystem
 	DocumentRuntime OnePasswordDocumentRuntime
 	Stdout          io.Writer
-	TargetPath      string
+	TargetRef       string
 	Now             func() time.Time
 	AllWorkspaces   bool
 	Summary         bool
@@ -62,8 +62,8 @@ func (u DiffTargets) Run() error {
 	if err := requireOnePasswordRuntime(u.DocumentRuntime); err != nil {
 		return err
 	}
-	if u.AllWorkspaces && u.TargetPath != "" {
-		return fmt.Errorf("diff accepts either --all or a target path, not both")
+	if u.AllWorkspaces && u.TargetRef != "" {
+		return fmt.Errorf("diff accepts either --all or a target ref, not both")
 	}
 
 	_, state, err := loadState(statusStateFileSystem{statusFileSystem: u.FileSystem})
@@ -71,14 +71,19 @@ func (u DiffTargets) Run() error {
 		return err
 	}
 
-	workspaces, err := resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces, "")
-	if err != nil {
-		return err
-	}
-
+	var workspaces []emergeWorkspace
 	targetPath := ""
-	if u.TargetPath != "" {
-		targetPath, err = normalizeEditTargetPath(u.TargetPath)
+	requireBoundSelection := false
+	if u.TargetRef != "" {
+		selection, selectionErr := resolveTargetSelection(u.FileSystem, config, u.TargetRef)
+		if selectionErr != nil {
+			return selectionErr
+		}
+		targetPath = selection.target
+		requireBoundSelection = selection.explicitWorkspace
+		workspaces = []emergeWorkspace{{id: selection.workspaceID, workspace: selection.workspace}}
+	} else {
+		workspaces, err = resolveEmergeWorkspaces(u.FileSystem, config, u.AllWorkspaces, "")
 		if err != nil {
 			return err
 		}
@@ -101,7 +106,7 @@ func (u DiffTargets) Run() error {
 		}
 
 		for _, target := range targets {
-			result, include, err := u.diffTarget(config, state, entry.id, entry.workspace, target, explicitTarget, now)
+			result, include, err := u.diffTarget(config, state, entry.id, entry.workspace, target, explicitTarget, requireBoundSelection, now)
 			if err != nil {
 				wrappedErr := wrapEmergeTargetError(u.AllWorkspaces, entry.id, target, err)
 				if u.AllWorkspaces {
@@ -131,7 +136,7 @@ func (u DiffTargets) Run() error {
 	return nil
 }
 
-func (u DiffTargets) diffTarget(config domain.Config, state domain.State, workspaceID string, workspace domain.Workspace, target string, explicit bool, now time.Time) (diffTargetResult, bool, error) {
+func (u DiffTargets) diffTarget(config domain.Config, state domain.State, workspaceID string, workspace domain.Workspace, target string, explicit, requireBound bool, now time.Time) (diffTargetResult, bool, error) {
 	result := diffTargetResult{
 		WorkspaceID: workspaceID,
 		Target:      target,
@@ -147,7 +152,6 @@ func (u DiffTargets) diffTarget(config domain.Config, state domain.State, worksp
 		}
 		return result, false, nil
 	}
-
 	workspaceTargetPath := filepath.Join(workspace.Root, target)
 	lease, ok, err := state.FindLease(workspaceID, target)
 	if err != nil {
@@ -158,6 +162,9 @@ func (u DiffTargets) diffTarget(config domain.Config, state domain.State, worksp
 			return result, false, fmt.Errorf("target is not emerged: %s", target)
 		}
 		return result, false, nil
+	}
+	if requireBound && (lease.WorkspacePath == "" || lease.StorePath == "") {
+		return result, false, fmt.Errorf("target lease is not bound to the selected workspace; re-run veil emerge %s", formatTargetRef(workspaceID, target))
 	}
 	if lease.StoreID != onePasswordStoreID {
 		if explicit {
@@ -226,9 +233,9 @@ func (u DiffTargets) diffTarget(config domain.Config, state domain.State, worksp
 
 	if result.Expired {
 		if result.Detail == "" {
-			result.Detail = "target lease is expired; re-run veil emerge before commit"
+			result.Detail = "target lease is expired; commit will renew it"
 		} else {
-			result.Detail += "; target lease is expired; re-run veil emerge before commit"
+			result.Detail += "; target lease is expired"
 		}
 	}
 

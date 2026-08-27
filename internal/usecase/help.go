@@ -14,9 +14,9 @@ Commands:
   remove    Stop managing a target and keep it as a workspace file
   purge     Permanently delete a registered target from Veil config and 1Password
   workspace Remove or purge the active workspace registration
-  emerge    Materialize one target ref, the active workspace, or all workspaces (--all, --verbose)
+  emerge    Materialize one target ref, the active workspace, or all workspaces (--all, --verbose, --overwrite-local)
   status    Show target states for all registered workspaces
-  diff      Show workspace changes against 1Password document targets (--all, --summary)
+  diff      Show workspace changes against 1Password document targets or one target ref (--all, --summary)
   vanish    Remove one target ref, active-workspace targets, or all targets (--all, --commit, --discard)
   ttl-agent Install, uninstall, or show the macOS TTL cleanup LaunchAgent
   ttl-cleaner
