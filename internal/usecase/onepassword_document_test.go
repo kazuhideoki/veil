@@ -225,7 +225,7 @@ func TestEmergeTargetsReportsExpiredModifiedOnePasswordDocument(t *testing.T) {
 		t.Fatalf("UpsertLeaseWithHash() returned error: %v", err)
 	}
 	writeStateForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), state)
-	restoreWD := chdirForTest(t, workspaceRoot)
+	restoreWD := chdirForTest(t, tempHome)
 	defer restoreWD()
 
 	runtime := newFakeOnePasswordRuntime()
@@ -236,6 +236,7 @@ func TestEmergeTargetsReportsExpiredModifiedOnePasswordDocument(t *testing.T) {
 		DocumentRuntime: runtime,
 		Stdout:          &stdout,
 		Now:             func() time.Time { return now },
+		TargetRef:       "myapp:.env",
 	}
 
 	err = uc.Run()
@@ -249,7 +250,9 @@ func TestEmergeTargetsReportsExpiredModifiedOnePasswordDocument(t *testing.T) {
 		"expired modified target: .env",
 		"uncommitted changes kept",
 		"veil diff .env",
-		"veil vanish --commit or --discard",
+		`from workspace "` + filepath.Dir(resolvedTargetPath) + `"`,
+		"veil vanish --commit myapp:.env",
+		"veil vanish --discard myapp:.env",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
@@ -650,7 +653,7 @@ func TestCommitTargetCommitsMaterializedOnePasswordDocument(t *testing.T) {
 	}
 }
 
-func TestCommitTargetSelectsRepoOutsideWorkspace(t *testing.T) {
+func TestCommitTargetSelectsTargetRefOutsideWorkspace(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
@@ -681,8 +684,7 @@ func TestCommitTargetSelectsRepoOutsideWorkspace(t *testing.T) {
 		FileSystem:      infra.OSFileSystem{},
 		DocumentRuntime: runtime,
 		Stdout:          &bytes.Buffer{},
-		TargetPath:      ".env",
-		Repo:            "myapp",
+		TargetPath:      "myapp:.env",
 		Now:             func() time.Time { return now },
 	}
 
@@ -694,7 +696,7 @@ func TestCommitTargetSelectsRepoOutsideWorkspace(t *testing.T) {
 	}
 }
 
-func TestCommitTargetWithRepoRejectsUnboundLease(t *testing.T) {
+func TestCommitTargetWithExplicitWorkspaceRejectsUnboundLease(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
 	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
@@ -719,12 +721,11 @@ func TestCommitTargetWithRepoRejectsUnboundLease(t *testing.T) {
 		FileSystem:      infra.OSFileSystem{},
 		DocumentRuntime: runtime,
 		Stdout:          &bytes.Buffer{},
-		TargetPath:      ".env",
-		Repo:            "myapp",
+		TargetPath:      "myapp:.env",
 		Now:             func() time.Time { return now },
 	}).Run()
 
-	if err == nil || !strings.Contains(err.Error(), "lease is not bound to the selected repo") {
+	if err == nil || !strings.Contains(err.Error(), "lease is not bound to the selected workspace") {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if got := string(runtime.documents["item-1"]); got != string(oldData) {
@@ -1337,7 +1338,11 @@ func TestVanishOnePasswordDocumentRefusesUncommittedChanges(t *testing.T) {
 	if err := os.WriteFile(targetPath, []byte("TOKEN=new\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() returned error: %v", err)
 	}
-	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), "version = 2\n\n[[leases]]\nworkspace_id = \"myapp\"\ntarget = \".env\"\nmounted_at = 2026-05-21T01:02:03Z\nexpires_at = 2026-05-22T01:02:03Z\nstore_id = \"1password\"\nworkspace_path = "+workspaceRootQuoted(targetPath)+"\nstore_path = \"item-1\"\nplaintext_sha256 = \""+sha256Hex([]byte("TOKEN=old\n"))+"\"\n")
+	resolvedTargetPath, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() returned error: %v", err)
+	}
+	writeConfigForTest(t, filepath.Join(tempHome, ".veil", "state.toml"), "version = 2\n\n[[leases]]\nworkspace_id = \"myapp\"\ntarget = \".env\"\nmounted_at = 2026-05-21T01:02:03Z\nexpires_at = 2026-05-22T01:02:03Z\nstore_id = \"1password\"\nworkspace_path = "+workspaceRootQuoted(resolvedTargetPath)+"\nstore_path = \"item-1\"\nplaintext_sha256 = \""+sha256Hex([]byte("TOKEN=old\n"))+"\"\n")
 	restoreWD := chdirForTest(t, workspaceRoot)
 	defer restoreWD()
 
@@ -1346,7 +1351,7 @@ func TestVanishOnePasswordDocumentRefusesUncommittedChanges(t *testing.T) {
 		Stdout:     &bytes.Buffer{},
 	}
 
-	err := uc.Run()
+	err = uc.Run()
 	if err == nil {
 		t.Fatal("Run() returned nil error")
 	}

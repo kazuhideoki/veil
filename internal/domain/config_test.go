@@ -229,3 +229,43 @@ func TestAddWorkspaceRejectsWorkspaceIDWithPathSeparator(t *testing.T) {
 		t.Fatalf("error = %q", err)
 	}
 }
+
+func TestAddWorkspaceRejectsWorkspaceIDWithTargetRefSeparator(t *testing.T) {
+	config := DefaultConfig()
+
+	err := config.AddWorkspace("team:api", "/tmp/workspace")
+	if err == nil {
+		t.Fatal("AddWorkspace() returned nil error")
+	}
+
+	if !strings.Contains(err.Error(), "target ref separator") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestWorkspaceRejectsTargetWithTargetRefSeparator(t *testing.T) {
+	workspace := Workspace{}
+
+	err := workspace.AddTarget("config:secret")
+	if err == nil {
+		t.Fatal("AddTarget() returned nil error")
+	}
+
+	if !strings.Contains(err.Error(), "target ref separator") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestParseConfigTOMLRejectsStoredTargetRefSeparators(t *testing.T) {
+	for name, data := range map[string]string{
+		"workspace": "[workspaces.\"team:api\"]\nroot = \"/tmp/workspace\"\ntargets = []\n",
+		"target":    "[workspaces.myapp]\nroot = \"/tmp/workspace\"\ntargets = [\"config:secret\"]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseConfigTOML([]byte(data))
+			if err == nil || !strings.Contains(err.Error(), "target ref separator") {
+				t.Fatalf("ParseConfigTOML() error = %v", err)
+			}
+		})
+	}
+}

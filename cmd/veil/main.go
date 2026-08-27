@@ -106,16 +106,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 		commitFlags.SetOutput(stderr)
 
 		var overwriteRemote bool
-		var repo string
 		commitFlags.BoolVar(&overwriteRemote, "overwrite-remote", false, "overwrite a changed 1Password document with the workspace target")
-		commitFlags.StringVar(&repo, "repo", "", "commit a target in the named repo")
 
 		if err := commitFlags.Parse(args[1:]); err != nil {
 			return err
 		}
 
 		if commitFlags.NArg() != 1 {
-			return fmt.Errorf("commit requires exactly one target path")
+			return fmt.Errorf("commit requires exactly one target ref")
 		}
 
 		runner := usecase.CommitTarget{
@@ -123,7 +121,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			TargetPath:      commitFlags.Arg(0),
-			Repo:            repo,
 			OverwriteRemote: overwriteRemote,
 		}
 
@@ -236,18 +233,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 		emergeFlags.SetOutput(stderr)
 
 		var allWorkspaces bool
-		var repo string
 		var verbose bool
 		emergeFlags.BoolVar(&allWorkspaces, "all", false, "emerge registered targets for all workspaces")
-		emergeFlags.StringVar(&repo, "repo", "", "emerge registered targets for the named repo")
 		emergeFlags.BoolVar(&verbose, "verbose", false, "show emerge timing details")
 
 		if err := emergeFlags.Parse(args[1:]); err != nil {
 			return err
 		}
 
-		if emergeFlags.NArg() != 0 {
-			return fmt.Errorf("emerge does not accept positional arguments: %v", emergeFlags.Args())
+		if emergeFlags.NArg() > 1 {
+			return fmt.Errorf("emerge accepts at most one target ref")
+		}
+		targetRef := ""
+		if emergeFlags.NArg() == 1 {
+			targetRef = emergeFlags.Arg(0)
 		}
 
 		runner := usecase.EmergeTargets{
@@ -255,7 +254,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
-			Repo:            repo,
+			TargetRef:       targetRef,
 		}
 		if verbose {
 			runner.VerboseOutput = stderr
@@ -276,7 +275,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				return err
 			}
 			writeVerboseTiming(stderr, verbose, "TTL agent check", time.Since(agentStarted))
-			if repo == "" {
+			if targetRef == "" {
 				cleaner := usecase.RunTTLCleaner{FileSystem: infra.OSFileSystem{}}
 				cleanupStarted := time.Now()
 				if err := cleaner.Run(); err != nil {
@@ -297,11 +296,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		vanishFlags.SetOutput(stderr)
 
 		var allWorkspaces bool
-		var repo string
 		var commit bool
 		var discard bool
 		vanishFlags.BoolVar(&allWorkspaces, "all", false, "vanish registered targets for all workspaces")
-		vanishFlags.StringVar(&repo, "repo", "", "vanish registered targets for the named repo")
 		vanishFlags.BoolVar(&commit, "commit", false, "commit modified 1Password document targets before vanishing")
 		vanishFlags.BoolVar(&discard, "discard", false, "discard modified 1Password document targets while vanishing")
 
@@ -309,8 +306,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 
-		if vanishFlags.NArg() != 0 {
-			return fmt.Errorf("vanish does not accept positional arguments: %v", vanishFlags.Args())
+		if vanishFlags.NArg() > 1 {
+			return fmt.Errorf("vanish accepts at most one target ref")
+		}
+		targetRef := ""
+		if vanishFlags.NArg() == 1 {
+			targetRef = vanishFlags.Arg(0)
 		}
 
 		runner := usecase.VanishTargets{
@@ -318,7 +319,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 			Stdout:          stdout,
 			AllWorkspaces:   allWorkspaces,
-			Repo:            repo,
+			TargetRef:       targetRef,
 			Commit:          commit,
 			Discard:         discard,
 		}

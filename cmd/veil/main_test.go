@@ -24,7 +24,7 @@ func TestRunWithUnsupportedArgsReturnsError(t *testing.T) {
 
 func TestRunCommitRequiresExactlyOneTarget(t *testing.T) {
 	err := run([]string{"commit"}, &bytes.Buffer{}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "commit requires exactly one target path") {
+	if err == nil || !strings.Contains(err.Error(), "commit requires exactly one target ref") {
 		t.Fatalf("run(commit) error = %v", err)
 	}
 }
@@ -40,6 +40,15 @@ func TestRunEmergeRefreshFlagIsRemoved(t *testing.T) {
 	err := run([]string{"emerge", "--refresh"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -refresh") {
 		t.Fatalf("run(emerge --refresh) error = %v", err)
+	}
+}
+
+func TestRunRepoFlagIsRemovedFromTargetCommands(t *testing.T) {
+	for _, command := range []string{"commit", "emerge", "vanish"} {
+		err := run([]string{command, "--repo", "myapp"}, &bytes.Buffer{}, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -repo") {
+			t.Fatalf("run(%s --repo) error = %v", command, err)
+		}
 	}
 }
 

@@ -68,8 +68,34 @@ func ParseConfigTOML(data []byte) (Config, error) {
 		config.Workspaces = map[string]Workspace{}
 	}
 	config.applyDefaults()
+	if err := config.validateStoredTargetIdentities(); err != nil {
+		return Config{}, err
+	}
 
 	return config, nil
+}
+
+// validateStoredTargetIdentities rejects ambiguous target refs before any command side effects.
+func (c Config) validateStoredTargetIdentities() error {
+	for workspaceID, workspace := range c.Workspaces {
+		if err := validateWorkspaceID(workspaceID); err != nil {
+			return fmt.Errorf("workspace %q: %w", workspaceID, err)
+		}
+		for _, target := range workspace.Targets {
+			if _, err := normalizeTargetPath(target); err != nil {
+				return fmt.Errorf("workspace %q target %q: %w", workspaceID, target, err)
+			}
+		}
+	}
+	for _, document := range c.Documents {
+		if err := validateWorkspaceID(document.WorkspaceID); err != nil {
+			return fmt.Errorf("document workspace %q: %w", document.WorkspaceID, err)
+		}
+		if _, err := normalizeTargetPath(document.Target); err != nil {
+			return fmt.Errorf("document target %q: %w", document.Target, err)
+		}
+	}
+	return nil
 }
 
 func (c Config) RenderTOML() ([]byte, error) {
@@ -222,6 +248,9 @@ func validateWorkspaceID(id string) error {
 	if strings.Contains(id, "..") {
 		return fmt.Errorf("workspace id must not contain parent directory segments: %s", id)
 	}
+	if strings.Contains(id, ":") {
+		return fmt.Errorf("workspace id must not contain the target ref separator: %s", id)
+	}
 
 	if strings.Contains(id, string(filepath.Separator)) {
 		return fmt.Errorf("workspace id must not contain path separators: %s", id)
@@ -368,6 +397,9 @@ func normalizeTargetPath(target string) (string, error) {
 
 	if filepath.IsAbs(target) {
 		return "", fmt.Errorf("target path must be relative: %s", target)
+	}
+	if strings.Contains(target, ":") {
+		return "", fmt.Errorf("target path must not contain the target ref separator: %s", target)
 	}
 
 	cleanTarget := filepath.Clean(target)

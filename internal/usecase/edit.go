@@ -199,6 +199,9 @@ func normalizeEditTargetPath(target string) (string, error) {
 	if filepath.IsAbs(target) {
 		return "", fmt.Errorf("target path must be relative: %s", target)
 	}
+	if strings.Contains(target, targetRefSeparator) {
+		return "", fmt.Errorf("target path must not contain the target ref separator: %s", target)
+	}
 
 	cleanTarget := filepath.Clean(target)
 	if cleanTarget == "." {
