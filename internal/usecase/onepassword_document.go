@@ -267,6 +267,19 @@ func removeMaterializedTarget(fs vanishFileSystem, workspaceTargetPath string) e
 }
 
 func currentWorkspace(config domain.Config, fs workspaceResolverFileSystem) (string, domain.Workspace, error) {
+	return resolveSelectedWorkspace(fs, config, "")
+}
+
+// resolveSelectedWorkspace keeps explicit repo selection independent from the caller's directory.
+func resolveSelectedWorkspace(fs workspaceResolverFileSystem, config domain.Config, repo string) (string, domain.Workspace, error) {
+	if repo != "" {
+		workspace, ok := config.Workspaces[repo]
+		if !ok {
+			return "", domain.Workspace{}, fmt.Errorf("repo is not registered: %s", repo)
+		}
+		return repo, workspace, nil
+	}
+
 	currentDir, err := fs.Getwd()
 	if err != nil {
 		return "", domain.Workspace{}, fmt.Errorf("resolve current directory: %w", err)
