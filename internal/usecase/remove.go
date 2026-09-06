@@ -48,8 +48,11 @@ type preparedTargetChange struct {
 }
 
 func (u RemoveTarget) Run() error {
-	ctx, err := loadActiveWorkspaceContext(u.FileSystem)
+	ctx, selection, err := loadTargetWorkspaceContext(u.FileSystem, u.TargetPath)
 	if err != nil {
+		return err
+	}
+	if err := requireExplicitWorkspaceRoot(u.FileSystem, selection); err != nil {
 		return err
 	}
 	if err := requireOnePasswordConfig(ctx.config); err != nil {
@@ -58,11 +61,11 @@ func (u RemoveTarget) Run() error {
 	if err := requireOnePasswordRuntime(u.DocumentRuntime); err != nil {
 		return err
 	}
-	return u.removeOnePasswordTarget(ctx)
+	return u.removeOnePasswordTarget(ctx, selection.target)
 }
 
-func (u RemoveTarget) removeOnePasswordTarget(ctx activeWorkspaceContext) error {
-	targetPath, _, err := prepareOnePasswordTargetForRemove(u.FileSystem, u.DocumentRuntime, &ctx, u.TargetPath)
+func (u RemoveTarget) removeOnePasswordTarget(ctx activeWorkspaceContext, target string) error {
+	targetPath, _, err := prepareOnePasswordTargetForRemove(u.FileSystem, u.DocumentRuntime, &ctx, target)
 	if err != nil {
 		return err
 	}
@@ -79,8 +82,11 @@ func (u RemoveTarget) removeOnePasswordTarget(ctx activeWorkspaceContext) error 
 }
 
 func (u PurgeTarget) Run() error {
-	ctx, err := loadActiveWorkspaceContext(u.FileSystem)
+	ctx, selection, err := loadTargetWorkspaceContext(u.FileSystem, u.TargetPath)
 	if err != nil {
+		return err
+	}
+	if err := requireExplicitWorkspaceRoot(u.FileSystem, selection); err != nil {
 		return err
 	}
 	if err := requireOnePasswordConfig(ctx.config); err != nil {
@@ -92,11 +98,29 @@ func (u PurgeTarget) Run() error {
 	if err := u.confirm(u.TargetPath); err != nil {
 		return err
 	}
-	return u.purgeOnePasswordTarget(ctx)
+	return u.purgeOnePasswordTarget(ctx, selection.target)
 }
 
-func (u PurgeTarget) purgeOnePasswordTarget(ctx activeWorkspaceContext) error {
-	targetPath, document, workspaceTargetPath, removeWorkspaceTarget, err := prepareOnePasswordTargetForPurge(u.FileSystem, u.DocumentRuntime, &ctx, u.TargetPath)
+func requireExplicitWorkspaceRoot(fs removeFileSystem, selection targetSelection) error {
+	if !selection.explicitWorkspace {
+		return nil
+	}
+
+	info, err := fs.Stat(selection.workspace.Root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("workspace root does not exist: %s", selection.workspace.Root)
+		}
+		return fmt.Errorf("stat workspace root: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace root is not a directory: %s", selection.workspace.Root)
+	}
+	return nil
+}
+
+func (u PurgeTarget) purgeOnePasswordTarget(ctx activeWorkspaceContext, target string) error {
+	targetPath, document, workspaceTargetPath, removeWorkspaceTarget, err := prepareOnePasswordTargetForPurge(u.FileSystem, u.DocumentRuntime, &ctx, target)
 	if err != nil {
 		return err
 	}
