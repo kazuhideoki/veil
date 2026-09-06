@@ -134,7 +134,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		if removeFlags.NArg() != 1 {
-			return fmt.Errorf("remove requires exactly one target path")
+			return fmt.Errorf("remove requires exactly one target ref")
 		}
 
 		runner := usecase.RemoveTarget{
@@ -157,7 +157,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 
 		if purgeFlags.NArg() != 1 {
-			return fmt.Errorf("purge requires exactly one target path")
+			return fmt.Errorf("purge requires exactly one target ref")
 		}
 
 		runner := usecase.PurgeTarget{

@@ -11,8 +11,8 @@ Commands:
   add       Move a target file, or a directory's direct files, into 1Password and register them
   edit      Open a registered 1Password document with $EDITOR
   commit    Commit one materialized target back to 1Password (--overwrite-remote)
-  remove    Stop managing a target and keep it as a workspace file
-  purge     Permanently delete a registered target from Veil config and 1Password
+  remove    Stop managing one target ref and keep it as a workspace file
+  purge     Permanently delete one target ref from Veil config and 1Password
   workspace Remove or purge the active workspace registration
   emerge    Materialize one target ref, the active workspace, or all workspaces (--all, --verbose, --overwrite-local)
   status    Show target states for all registered workspaces

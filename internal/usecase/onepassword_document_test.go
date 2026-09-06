@@ -1440,6 +1440,42 @@ func TestRemoveTargetRefusesWorkspaceFileThatDiffersFromOnePasswordDocument(t *t
 	}
 }
 
+func TestRemoveTargetAcceptsTargetRefOutsideWorkspace(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = ["scripts/repository_map/.env"]`)
+	appendDocumentConfig(t, tempHome, "scripts/repository_map/.env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	uc := RemoveTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		TargetPath:      "myapp:scripts/repository_map/.env",
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	workspaceData, err := os.ReadFile(filepath.Join(workspaceRoot, "scripts/repository_map/.env"))
+	if err != nil {
+		t.Fatalf("ReadFile(workspace target) returned error: %v", err)
+	}
+	if string(workspaceData) != "TOKEN=test\n" {
+		t.Fatalf("workspace data = %q", string(workspaceData))
+	}
+	configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config) returned error: %v", err)
+	}
+	if strings.Contains(string(configData), `target = "scripts/repository_map/.env"`) {
+		t.Fatalf("config = %q, target still registered", string(configData))
+	}
+}
+
 func TestPurgeTargetDeletesOnePasswordDocumentAndWorkspaceFile(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
@@ -1506,6 +1542,93 @@ func TestPurgeTargetRequiresConfirmationWhenNonInteractive(t *testing.T) {
 	}
 	if _, ok := runtime.documents["item-1"]; !ok {
 		t.Fatal("1Password document was deleted")
+	}
+}
+
+func TestPurgeTargetAcceptsTargetRefOutsideWorkspace(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = ["scripts/repository_map/.env"]`)
+	appendDocumentConfig(t, tempHome, "scripts/repository_map/.env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+	targetPath := filepath.Join(workspaceRoot, "scripts/repository_map/.env")
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() returned error: %v", err)
+	}
+	if err := os.WriteFile(targetPath, []byte("TOKEN=test\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() returned error: %v", err)
+	}
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("TOKEN=test\n")
+	uc := PurgeTarget{
+		FileSystem:      infra.OSFileSystem{},
+		DocumentRuntime: runtime,
+		Stdout:          &bytes.Buffer{},
+		AssumeYes:       true,
+		TargetPath:      "myapp:scripts/repository_map/.env",
+	}
+
+	if err := uc.Run(); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+	if _, ok := runtime.documents["item-1"]; ok {
+		t.Fatal("1Password document still exists")
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("workspace target still exists, err=%v", err)
+	}
+}
+
+func TestTargetChangesRefuseMissingExplicitWorkspaceRoot(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(removeFileSystem, OnePasswordDocumentRuntime) error
+	}{
+		{
+			name: "remove",
+			run: func(fs removeFileSystem, runtime OnePasswordDocumentRuntime) error {
+				return (RemoveTarget{FileSystem: fs, DocumentRuntime: runtime, Stdout: &bytes.Buffer{}, TargetPath: "myapp:.env"}).Run()
+			},
+		},
+		{
+			name: "purge",
+			run: func(fs removeFileSystem, runtime OnePasswordDocumentRuntime) error {
+				return (PurgeTarget{FileSystem: fs, DocumentRuntime: runtime, Stdout: &bytes.Buffer{}, AssumeYes: true, TargetPath: "myapp:.env"}).Run()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempHome := t.TempDir()
+			t.Setenv("HOME", tempHome)
+			workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+			appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+			if err := os.Remove(workspaceRoot); err != nil {
+				t.Fatalf("Remove(workspace root) returned error: %v", err)
+			}
+			restoreWD := chdirForTest(t, tempHome)
+			defer restoreWD()
+
+			runtime := newFakeOnePasswordRuntime()
+			runtime.documents["item-1"] = []byte("TOKEN=test\n")
+			err := tt.run(infra.OSFileSystem{}, runtime)
+			if err == nil || !strings.Contains(err.Error(), "workspace root does not exist") {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if _, ok := runtime.documents["item-1"]; !ok {
+				t.Fatal("1Password document was deleted")
+			}
+			configData, readErr := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+			if readErr != nil {
+				t.Fatalf("ReadFile(config) returned error: %v", readErr)
+			}
+			if !strings.Contains(string(configData), `target = ".env"`) {
+				t.Fatalf("config = %q, target registration was removed", string(configData))
+			}
+		})
 	}
 }
 

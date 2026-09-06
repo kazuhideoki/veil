@@ -81,8 +81,14 @@ veil vanish --all
 # stop managing a target and keep it as a normal workspace file
 veil remove .env
 
+# stop managing a target from any directory
+veil remove myapp:.env
+
 # permanently delete a target from Veil and 1Password
 veil purge --yes .env
+
+# permanently delete a target from any directory
+veil purge --yes myapp:.env
 
 # stop managing the current workspace and keep its targets as normal files
 veil workspace remove
@@ -94,7 +100,7 @@ veil workspace purge --yes
 veil ttl-agent install --interval 60
 ```
 
-`veil emerge`, `veil commit`, `veil diff`, and `veil vanish` accept `workspace_id:target` when they must address one registered file outside the current workspace. For example, `myapp:.env` and `myapp:config/service-account.json` identify two distinct targets in the same workspace. Within the active workspace, the shorter relative target path remains available.
+`veil emerge`, `veil commit`, `veil diff`, `veil remove`, `veil purge`, and `veil vanish` accept `workspace_id:target` when they must address one registered file outside the current workspace. For example, `myapp:.env` and `myapp:config/service-account.json` identify two distinct targets in the same workspace. Within the active workspace, the shorter relative target path remains available.
 
 With no target ref, `veil emerge` and `veil vanish` operate on every registered target in the active workspace. `--all` operates on every registered workspace and cannot be combined with a target ref.
 

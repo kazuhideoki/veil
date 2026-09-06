@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/kazuhideoki/veil/internal/domain"
 )
@@ -59,6 +60,38 @@ func loadActiveWorkspaceContext(fs activeWorkspaceFileSystem) (activeWorkspaceCo
 		workspaceID: workspaceID,
 		workspace:   workspace,
 	}, nil
+}
+
+// loadTargetWorkspaceContext resolves a target ref, including an explicit
+// workspace target selected from outside that workspace.
+func loadTargetWorkspaceContext(fs activeWorkspaceFileSystem, ref string) (activeWorkspaceContext, targetSelection, error) {
+	configPath, config, err := loadConfig(fs)
+	if err != nil {
+		return activeWorkspaceContext{}, targetSelection{}, err
+	}
+
+	homeDir, err := fs.UserHomeDir()
+	if err != nil {
+		return activeWorkspaceContext{}, targetSelection{}, fmt.Errorf("resolve home directory: %w", err)
+	}
+
+	config = expandConfigPaths(config, homeDir)
+	// Explicit refs do not need cwd matching, so keep configured roots unchanged
+	// when this command later persists the selected target removal.
+	if !strings.Contains(ref, targetRefSeparator) {
+		config = canonicalizeWorkspaceRoots(config, fs)
+	}
+	selection, err := resolveTargetSelection(fs, config, ref)
+	if err != nil {
+		return activeWorkspaceContext{}, targetSelection{}, err
+	}
+
+	return activeWorkspaceContext{
+		configPath:  configPath,
+		config:      config,
+		workspaceID: selection.workspaceID,
+		workspace:   selection.workspace,
+	}, selection, nil
 }
 
 func (c *activeWorkspaceContext) persistConfig(fs activeWorkspaceFileSystem, stdout io.Writer) error {
