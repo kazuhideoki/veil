@@ -181,22 +181,25 @@ func run(args []string, stdout, stderr io.Writer) error {
 			workspaceRemoveFlags := flag.NewFlagSet("workspace remove", flag.ContinueOnError)
 			workspaceRemoveFlags.SetOutput(stderr)
 
-			var workspaceID string
-			workspaceRemoveFlags.StringVar(&workspaceID, "workspace-id", "", "registered workspace id to remove")
+			workspaceRemoveFlags.Usage = func() {
+				fmt.Fprintln(stderr, "Usage: veil workspace remove [workspace-id]")
+				fmt.Fprintln(stderr, "Without an ID, remove the current workspace registration and keep its targets as normal files.")
+				fmt.Fprintln(stderr, "With an ID, remove a registered workspace whose root directory no longer exists.")
+			}
 
 			if err := workspaceRemoveFlags.Parse(args[2:]); err != nil {
 				return err
 			}
 
-			if workspaceRemoveFlags.NArg() != 0 {
-				return fmt.Errorf("workspace remove does not accept positional arguments: %v", workspaceRemoveFlags.Args())
+			if workspaceRemoveFlags.NArg() > 1 {
+				return fmt.Errorf("workspace remove accepts at most one workspace id")
 			}
 
 			runner := usecase.RemoveWorkspace{
 				FileSystem:      infra.OSFileSystem{},
 				DocumentRuntime: infra.OnePasswordDocumentRuntime{},
 				Stdout:          stdout,
-				WorkspaceID:     workspaceID,
+				WorkspaceID:     workspaceRemoveFlags.Arg(0),
 			}
 
 			return withStateLock(runner.Run)
