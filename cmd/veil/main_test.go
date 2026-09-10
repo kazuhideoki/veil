@@ -15,6 +15,40 @@ func TestRunWithoutArgs(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceRemoveByPositionalID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, ".veil", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := fmt.Sprintf("version = 1\n[store]\nbackend = \"1password_document\"\nvault = \"Personal\"\n[workspaces.missing]\nroot = %q\ntargets = []\n", filepath.Join(home, "missing"))
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := run([]string{"workspace", "remove", "missing"}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "removed workspace: missing") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "[workspaces.") {
+		t.Fatalf("workspace registration remains: %s", data)
+	}
+}
+
+func TestRunWorkspaceRemoveRejectsExtraIDs(t *testing.T) {
+	err := run([]string{"workspace", "remove", "first", "second"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "at most one workspace id") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunWithUnsupportedArgsReturnsError(t *testing.T) {
 	err := run([]string{"unsupported"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil {
