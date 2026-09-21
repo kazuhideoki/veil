@@ -54,7 +54,6 @@ func (u RemoveWorkspace) removeRegisteredWorkspaceByID() error {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
 	config = expandConfigPaths(config, homeDir)
-	config = canonicalizeWorkspaceRoots(config, u.FileSystem)
 	if err := requireOnePasswordConfig(config); err != nil {
 		return err
 	}
@@ -63,8 +62,21 @@ func (u RemoveWorkspace) removeRegisteredWorkspaceByID() error {
 	if !exists {
 		return fmt.Errorf("workspace does not exist: %s", u.WorkspaceID)
 	}
-	if err := requireWorkspaceRootMissing(u.FileSystem, u.WorkspaceID, workspace.Root); err != nil {
-		return err
+	info, err := u.FileSystem.Stat(workspace.Root)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("workspace root path exists and is not a directory: %s", workspace.Root)
+		}
+		// Use the registered root without requiring the caller to change directories.
+		return u.removeOnePasswordWorkspace(activeWorkspaceContext{
+			configPath:  configPath,
+			config:      config,
+			workspaceID: u.WorkspaceID,
+			workspace:   workspace,
+		})
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat workspace root for %s: %w", u.WorkspaceID, err)
 	}
 
 	if err := config.RemoveWorkspace(u.WorkspaceID); err != nil {
@@ -120,20 +132,6 @@ func (u RemoveWorkspace) removeOnePasswordWorkspace(ctx activeWorkspaceContext) 
 
 	fmt.Fprintf(u.Stdout, "removed workspace: %s\n", ctx.workspaceID)
 	return nil
-}
-
-func requireWorkspaceRootMissing(fs removeFileSystem, workspaceID, root string) error {
-	info, err := fs.Stat(root)
-	if err == nil {
-		if info.IsDir() {
-			return fmt.Errorf("workspace root exists: %s; run veil workspace remove from that workspace", root)
-		}
-		return fmt.Errorf("workspace root path exists and is not a directory: %s", root)
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return fmt.Errorf("stat workspace root for %s: %w", workspaceID, err)
 }
 
 func (u PurgeWorkspace) Run() error {

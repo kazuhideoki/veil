@@ -13,7 +13,7 @@ Commands:
   commit    Commit one materialized target back to 1Password (--overwrite-remote)
   remove    Stop managing one target ref and keep it as a workspace file
   purge     Permanently delete one target ref from Veil config and 1Password
-  workspace Remove the active or a missing workspace registration, or purge the active workspace
+  workspace Remove the active or named workspace registration, or purge the active workspace
   emerge    Materialize one target ref, the active workspace, or all workspaces (--all, --verbose, --overwrite-local)
   status    Show target states for all registered workspaces
   diff      Show workspace changes against 1Password document targets or one target ref (--all, --summary)

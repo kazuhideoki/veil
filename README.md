@@ -93,7 +93,7 @@ veil purge --yes myapp:.env
 # stop managing the current workspace and keep its targets as normal files
 veil workspace remove
 
-# remove a workspace registration whose root directory no longer exists
+# stop managing a named workspace from any directory (also accepts a missing root)
 veil workspace remove myapp
 
 # permanently delete the current workspace's targets from Veil and 1Password

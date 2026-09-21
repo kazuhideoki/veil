@@ -184,7 +184,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			workspaceRemoveFlags.Usage = func() {
 				fmt.Fprintln(stderr, "Usage: veil workspace remove [workspace-id]")
 				fmt.Fprintln(stderr, "Without an ID, remove the current workspace registration and keep its targets as normal files.")
-				fmt.Fprintln(stderr, "With an ID, remove a registered workspace whose root directory no longer exists.")
+				fmt.Fprintln(stderr, "With an ID, stop managing that workspace from any directory, even if its root no longer exists.")
 			}
 
 			if err := workspaceRemoveFlags.Parse(args[2:]); err != nil {
