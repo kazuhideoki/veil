@@ -1714,6 +1714,119 @@ func TestWorkspaceRemoveRestoresAllWorkspaceFilesAndKeepsOnePasswordDocuments(t 
 	}
 }
 
+func TestWorkspaceRemoveByIDRestoresFilesAndKeepsDocuments(t *testing.T) {
+	for _, location := range []string{"outside", "inside", "symlink"} {
+		t.Run(location, func(t *testing.T) {
+			tempHome := t.TempDir()
+			t.Setenv("HOME", tempHome)
+			workspaceRoot := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env", "config/app.json"]`)
+			appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("TOKEN=test\n")))
+			appendDocumentConfig(t, tempHome, "config/app.json", "item-2", sha256Hex([]byte("{\"key\":\"value\"}\n")))
+			cwd := tempHome
+			if location == "inside" {
+				cwd = workspaceRoot
+			}
+			if location == "symlink" {
+				alias := filepath.Join(tempHome, "workspace-alias")
+				if err := os.Symlink(workspaceRoot, alias); err != nil {
+					t.Fatal(err)
+				}
+				configPath := filepath.Join(tempHome, ".veil", "config.toml")
+				data, err := os.ReadFile(configPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resolvedRoot, err := filepath.EvalSymlinks(workspaceRoot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(configPath, []byte(strings.ReplaceAll(string(data), resolvedRoot, alias)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			restoreWD := chdirForTest(t, cwd)
+			defer restoreWD()
+
+			runtime := newFakeOnePasswordRuntime()
+			runtime.documents["item-1"] = []byte("TOKEN=test\n")
+			runtime.documents["item-2"] = []byte("{\"key\":\"value\"}\n")
+			uc := RemoveWorkspace{
+				WorkspaceID:     "myapp",
+				FileSystem:      infra.OSFileSystem{},
+				DocumentRuntime: runtime,
+				Stdout:          &bytes.Buffer{},
+			}
+
+			if err := uc.Run(); err != nil {
+				t.Fatalf("Run() returned error: %v", err)
+			}
+			for target, want := range map[string]string{
+				".env":            "TOKEN=test\n",
+				"config/app.json": "{\"key\":\"value\"}\n",
+			} {
+				data, err := os.ReadFile(filepath.Join(workspaceRoot, target))
+				if err != nil {
+					t.Fatalf("ReadFile(%q) returned error: %v", target, err)
+				}
+				if string(data) != want {
+					t.Fatalf("%s data = %q", target, string(data))
+				}
+			}
+			if len(runtime.deleted) != 0 {
+				t.Fatalf("deleted documents = %v, want none", runtime.deleted)
+			}
+			configData, err := os.ReadFile(filepath.Join(tempHome, ".veil", "config.toml"))
+			if err != nil {
+				t.Fatalf("ReadFile(config) returned error: %v", err)
+			}
+			if strings.Contains(string(configData), `[workspaces.myapp]`) || strings.Contains(string(configData), `[[documents]]`) {
+				t.Fatalf("config = %q, workspace or documents still registered", string(configData))
+			}
+		})
+	}
+}
+
+func TestWorkspaceRemoveByIDPreservesModifiedFileAndRegistration(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	root := prepareOnePasswordWorkspace(t, tempHome, `targets = [".env"]`)
+	appendDocumentConfig(t, tempHome, ".env", "item-1", sha256Hex([]byte("original")))
+	target := filepath.Join(root, ".env")
+	if err := os.WriteFile(target, []byte("modified"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(tempHome, ".veil", "config.toml")
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoreWD := chdirForTest(t, tempHome)
+	defer restoreWD()
+	runtime := newFakeOnePasswordRuntime()
+	runtime.documents["item-1"] = []byte("original")
+	uc := RemoveWorkspace{FileSystem: infra.OSFileSystem{}, DocumentRuntime: runtime, Stdout: &bytes.Buffer{}, WorkspaceID: "myapp"}
+	if err := uc.Run(); err == nil || !strings.Contains(err.Error(), "differs from 1Password") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("registration changed on conflict")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "modified" {
+		t.Fatalf("modified file changed: %q", data)
+	}
+	if len(runtime.deleted) != 0 {
+		t.Fatal("document deleted on conflict")
+	}
+}
+
 func TestWorkspacePurgeDeletesOnePasswordDocumentsAndWorkspaceFiles(t *testing.T) {
 	tempHome := t.TempDir()
 	t.Setenv("HOME", tempHome)
